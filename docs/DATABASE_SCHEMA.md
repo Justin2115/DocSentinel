@@ -16,7 +16,7 @@ DocSentinel' core data — who owns a document, what folder it's in, what role a
 
 ### Why ChromaDB Is Separate
 
-PostgreSQL is built for exact, structured lookups ("which documents can user X see"). ChromaDB is built for approximate nearest-neighbor search over high-dimensional embedding vectors ("which text chunks are semantically closest to this question"). These are different computational problems with different indexing strategies (B-tree/GIN vs. HNSW/vector indexes). Running both in one engine would compromise one workload to accommodate the other. Postgres remains the **source of truth**; ChromaDB is a **derived, rebuildable index** — if it's ever wiped, it can be regenerated from Postgres + stored files.
+PostgreSQL is built for e xact, structured lookups ("which documents can user X see"). ChromaDB is built for approximate nearest-neighbor search over high-dimensional embedding vectors ("which text chunks are semantically closest to this question"). These are different computational problems with different indexing strategies (B-tree/GIN vs. HNSW/vector indexes). Running both in one engine would compromise one workload to accommodate the other. Postgres remains the **source of truth**; ChromaDB is a **derived, rebuildable index** — if it's ever wiped, it can be regenerated from Postgres + stored files.
 
 ### Why Files Are Not Stored in PostgreSQL
 

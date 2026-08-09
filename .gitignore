@@ -1,33 +1,68 @@
+# =========================
 # Python
+# =========================
+
 backend/venv/
 __pycache__/
 *.pyc
-
-# Node
-frontend/node_modules/
-.next/
-
-# Environment files
-.env
-*.env
-
-# Logs
-*.log
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# Python cache
 .pytest_cache/
 .mypy_cache/
 
-# Uploads
-storage/uploads/
 
-# Vector DB
+# =========================
+# Node
+# =========================
+
+node_modules/
+.next/
+dist/
+build/
+
+
+# =========================
+# Environment files
+# =========================
+
+.env
+*.env
+
+# Allow the example environment file
+!.env.example
+
+
+# =========================
+# Logs
+# =========================
+
+*.log
+
+
+# =========================
+# OS files
+# =========================
+
+.DS_Store
+Thumbs.db
+
+
+# =========================
+# IDE
+# =========================
+
+.vscode/
+.idea/
+
+
+# =========================
+# Uploaded documents
+# =========================
+
+storage/uploads/
+backend/uploads/
+
+
+# =========================
+# Vector database
+# =========================
+
 vector_db/chroma/

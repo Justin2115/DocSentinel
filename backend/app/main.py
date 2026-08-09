@@ -1,26 +1,27 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+from app.api.documents import router as documents_router
+
 
 app = FastAPI(
     title="DocSentinel API",
     version="1.0.0",
-    description="Backend API for the DocSentinel Document Management System"
+    description="Backend API for the DocSentinel Document Management System",
 )
 
-@app.get("/")
-async def root():
-    return {
-        "message": "Welcome to DocSentinel API",
-        "status": "running"
-    }
 
-@app.get("/health")
-async def health():
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": "healthy",
-            "service": "DocSentinel Backend",
-            "version": "1.0.0"
-        }
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+app.include_router(documents_router)

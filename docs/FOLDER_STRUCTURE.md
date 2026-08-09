@@ -4,57 +4,100 @@
 DocSentinel/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI app entrypoint, router registration
-│   │   ├── api/                 # Route handlers grouped by domain (auth, documents, query)
-│   │   ├── services/             # Business logic: upload, ocr, chunking, embedding, rag
-│   │   ├── models/               # SQLAlchemy ORM models (User, Role, Document, Metadata)
-│   │   ├── schemas/               # Pydantic request/response schemas
-│   │   ├── core/                  # Config, security (JWT), dependency injection
-│   │   └── db/                    # DB session setup, migrations entrypoint
-│   ├── tests/                     # Pytest unit/integration tests
+│   │   ├── __init__.py
+│   │   ├── main.py                     # FastAPI application entry point
+│   │   │
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   ├── auth.py                 # Authentication endpoints
+│   │   │   ├── documents.py            # Document upload/search APIs
+│   │   │   └── query.py                # RAG & AI query endpoints
+│   │   │
+│   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   ├── upload_service.py       # Upload & storage logic
+│   │   │   ├── ocr_service.py          # OCR orchestration (later)
+│   │   │   ├── extraction_service.py   # Module 2 integration (later)
+│   │   │   ├── embedding_service.py    # Module 1 integration (later)
+│   │   │   └── workflow_service.py     # Workflow management
+│   │   │
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py
+│   │   │   ├── role.py
+│   │   │   ├── folder.py
+│   │   │   ├── document.py
+│   │   │   ├── workflow_status.py
+│   │   │   ├── audit.py
+│   │   │   └── processing_job.py
+│   │   │
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py
+│   │   │   ├── auth.py
+│   │   │   ├── folder.py
+│   │   │   ├── document.py
+│   │   │   ├── query.py
+│   │   │   └── workflow.py
+│   │   │
+│   │   ├── core/
+│   │   │   ├── __init__.py
+│   │   │   ├── config.py
+│   │   │   ├── security.py
+│   │   │   └── dependencies.py
+│   │   │
+│   │   └── db/
+│   │       ├── __init__.py
+│   │       ├── base.py
+│   │       ├── session.py
+│   │      
+│   │
+│   ├── tests/
 │   ├── requirements.txt
-│   └── Dockerfile
+│   ├── Dockerfile
+│   └── .gitignore
 │
 ├── frontend/
 │   ├── src/
-│   │   ├── components/            # Reusable UI components
-│   │   ├── pages/                 # Route-level views (Upload, Search, Chat, Admin)
-│   │   ├── api/                    # Typed API client functions
-│   │   ├── hooks/                  # Custom React hooks
-│   │   └── types/                  # Shared TypeScript types (mirrors backend schemas)
+│   │   ├── api/                        # Frontend API wrappers
+│   │   ├── assets/                     # Static assets
+│   │   ├── components/                 # Reusable React components
+│   │   ├── hooks/                      # Custom React hooks
+│   │   ├── pages/                      # Application pages
+│   │   └── types/                      # Shared TypeScript types
+│   │
+│   ├── public/
 │   ├── package.json
+│   ├── package-lock.json
+│   ├── vite.config.ts
 │   └── Dockerfile
 │
-├── ocr/                             # OCR-specific scripts, isolated so it can become
-│                                     # its own worker/service later without touching backend/
-│
-├── ingestion/                        # Format parsers (PDF, DOCX, XLSX, email, image)
-│                                      # Each parser outputs the shared ingestion contract shape
-│
-├── storage/                          # Local dev file storage (gitignored contents)
-│
-├── vector_db/                        # ChromaDB persistence directory (gitignored)
-│
 ├── database/
-│   ├── migrations/                   # Alembic migration scripts
-│   └── schema.sql                     # Reference schema dump
+│   ├── migrations/                     # Alembic migrations (future)
+│   └── schema.sql                      # Database schema reference
 │
 ├── docker/
-│   ├── docker-compose.yml             # Orchestrates backend, frontend, postgres, chroma, minio
-│   ├── backend.Dockerfile
-│   └── frontend.Dockerfile
+│   ├── docker-compose.yml              # Runs all project services together
+│   ├── backend.Dockerfile              # Backend Docker image
+│   └── frontend.Dockerfile             # Frontend Docker image
 │
-├── scripts/                            # One-off setup/maintenance scripts (seed data, backfills)
-│
-├── docs/                                # This documentation set
+├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── TECH_STACK.md
 │   ├── FOLDER_STRUCTURE.md
 │   ├── PROJECT_ARCHITECTURE_OVERVIEW.md
-│   └── ingestion-contract.md
+│   ├── DATABASE_SCHEMA.md
+│   ├── Backend_integration.md
+│   └── ingestion_contract.md
 │
-├── .env.example                          # Documents required env vars without real secrets
-├── .gitignore
+├── ingestion/                          # File parsers (PDF, DOCX, XLSX, Images)
+├── ocr/                                # OCR processing module
+├── scripts/                            # Utility scripts
+├── storage/                            # Uploaded documents (gitignored)
+├── vector_db/                          # Chroma persistence (gitignored)
+│
+├── .env.example                        # Example environment variables
+├── .gitignore                          # Root Git ignore rules
 └── README.md
 ```
 
