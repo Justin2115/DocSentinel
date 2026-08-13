@@ -31,3 +31,8 @@ storage/uploads/
 
 # Vector DB
 vector_db/chroma/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
