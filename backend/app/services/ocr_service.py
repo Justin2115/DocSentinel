@@ -5,12 +5,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Initialize RapidOCR lazily
+# Supported language codes
+SUPPORTED_LANGUAGES = {"en", "hi", "mr"}
+
+# Initialize OCR engines lazily
 _rapid_ocr_engine = None
+_hindi_ocr_reader = None
+_marathi_ocr_reader = None
 
 
 def get_rapid_ocr_engine():
@@ -24,6 +30,32 @@ def get_rapid_ocr_engine():
             logger.warning(f"Could not initialize RapidOCR engine: {e}")
             _rapid_ocr_engine = False
     return _rapid_ocr_engine if _rapid_ocr_engine is not False else None
+
+
+def get_hindi_ocr_reader():
+    global _hindi_ocr_reader
+    if _hindi_ocr_reader is None:
+        try:
+            import easyocr
+
+            _hindi_ocr_reader = easyocr.Reader(["hi", "en"], gpu=False, verbose=False)
+        except Exception as e:
+            logger.warning(f"Could not initialize Hindi EasyOCR reader: {e}")
+            _hindi_ocr_reader = False
+    return _hindi_ocr_reader if _hindi_ocr_reader is not False else None
+
+
+def get_marathi_ocr_reader():
+    global _marathi_ocr_reader
+    if _marathi_ocr_reader is None:
+        try:
+            import easyocr
+
+            _marathi_ocr_reader = easyocr.Reader(["mr", "en"], gpu=False, verbose=False)
+        except Exception as e:
+            logger.warning(f"Could not initialize Marathi EasyOCR reader: {e}")
+            _marathi_ocr_reader = False
+    return _marathi_ocr_reader if _marathi_ocr_reader is not False else None
 
 
 @dataclass
@@ -48,6 +80,7 @@ class DocumentExtractionResult:
 def clean_extracted_text(text: str) -> str:
     """
     Clean OCR and PDF text noise while preserving meaningful structure.
+    - Preserves Devanagari script, Latin text, digits, punctuation.
     - Removes non-printable control characters (except newline, tab).
     - Replaces weird whitespace and repeated symbols.
     - Normalizes consecutive blank lines.
@@ -55,7 +88,7 @@ def clean_extracted_text(text: str) -> str:
     if not text:
         return ""
 
-    # Remove non-printable control characters
+    # Remove non-printable control characters, preserving all printable Unicode (including Devanagari)
     cleaned = "".join(ch for ch in text if ch.isprintable() or ch in ("\n", "\r", "\t"))
 
     # Normalize carriage returns
@@ -74,18 +107,77 @@ def clean_extracted_text(text: str) -> str:
     return cleaned
 
 
-def _perform_image_ocr(image: Image.Image) -> tuple[str, float, str]:
+def _perform_image_ocr(image: Image.Image, language: str = "en") -> tuple[str, float, str]:
     """
-    Perform OCR on a PIL Image with automatic fallback:
-    1. RapidOCR (self-contained ONNX engine)
-    2. pytesseract (if installed on system)
-    3. Graceful fallback returning empty string if no OCR engine succeeds.
+    Perform OCR on a PIL Image based on selected language:
+    - 'en': RapidOCR (with pytesseract fallback)
+    - 'hi': EasyOCR Hindi (['hi', 'en'])
+    - 'mr': EasyOCR Marathi (['mr', 'en'])
     """
-    # 1. Try RapidOCR
+    lang = (language or "en").lower().strip()
+
+    # 1. Hindi OCR
+    if lang == "hi":
+        reader = get_hindi_ocr_reader()
+        if reader is not None:
+            try:
+                img_np = np.array(image.convert("RGB"))
+                ocr_res = reader.readtext(img_np)
+                if ocr_res:
+                    texts = [item[1] for item in ocr_res if item[1].strip()]
+                    scores = [float(item[2]) for item in ocr_res if item[1].strip()]
+                    full_text = "\n".join(texts)
+                    avg_confidence = (sum(scores) / len(scores)) if scores else 0.0
+                    return full_text, round(avg_confidence * 100.0, 2), "EasyOCR-Hindi"
+                else:
+                    return "", 0.0, "EasyOCR-Hindi"
+            except Exception as e:
+                logger.warning(f"EasyOCR Hindi extraction failed: {e}")
+
+        # Fallback to pytesseract with Hindi if available
+        try:
+            import pytesseract
+
+            ocr_text = pytesseract.image_to_string(image, lang="hin")
+            return ocr_text, 80.0, "Tesseract-Hindi"
+        except Exception as e:
+            logger.warning(f"Tesseract Hindi OCR failed: {e}")
+
+        return "", 0.0, "EasyOCR-Hindi"
+
+    # 2. Marathi OCR
+    if lang == "mr":
+        reader = get_marathi_ocr_reader()
+        if reader is not None:
+            try:
+                img_np = np.array(image.convert("RGB"))
+                ocr_res = reader.readtext(img_np)
+                if ocr_res:
+                    texts = [item[1] for item in ocr_res if item[1].strip()]
+                    scores = [float(item[2]) for item in ocr_res if item[1].strip()]
+                    full_text = "\n".join(texts)
+                    avg_confidence = (sum(scores) / len(scores)) if scores else 0.0
+                    return full_text, round(avg_confidence * 100.0, 2), "EasyOCR-Marathi"
+                else:
+                    return "", 0.0, "EasyOCR-Marathi"
+            except Exception as e:
+                logger.warning(f"EasyOCR Marathi extraction failed: {e}")
+
+        # Fallback to pytesseract with Marathi if available
+        try:
+            import pytesseract
+
+            ocr_text = pytesseract.image_to_string(image, lang="mar")
+            return ocr_text, 80.0, "Tesseract-Marathi"
+        except Exception as e:
+            logger.warning(f"Tesseract Marathi OCR failed: {e}")
+
+        return "", 0.0, "EasyOCR-Marathi"
+
+    # 3. Default English OCR (RapidOCR with Tesseract fallback)
     rapid_engine = get_rapid_ocr_engine()
     if rapid_engine is not None:
         try:
-            # Convert PIL image to bytes or numpy array
             img_byte_arr = io.BytesIO()
             image.convert("RGB").save(img_byte_arr, format="PNG")
             img_bytes = img_byte_arr.getvalue()
@@ -95,7 +187,6 @@ def _perform_image_ocr(image: Image.Image) -> tuple[str, float, str]:
                 texts = []
                 scores = []
                 for item in ocr_res:
-                    # item structure: [box_points, text, confidence_score]
                     text_content = item[1]
                     score = float(item[2])
                     texts.append(text_content)
@@ -109,8 +200,6 @@ def _perform_image_ocr(image: Image.Image) -> tuple[str, float, str]:
         except Exception as e:
             logger.warning(f"RapidOCR extraction failed: {e}")
 
-
-    # 2. Try pytesseract
     try:
         import pytesseract
 
@@ -135,14 +224,14 @@ def _perform_image_ocr(image: Image.Image) -> tuple[str, float, str]:
     return "", 0.0, "None"
 
 
-def process_image_document(file_path: Path) -> DocumentExtractionResult:
+def process_image_document(file_path: Path, language: str = "en") -> DocumentExtractionResult:
     """
-    Process single image documents (.png, .jpg, .jpeg).
+    Process single image documents (.png, .jpg, .jpeg) for given language.
     """
     try:
         with Image.open(file_path) as img:
             width, height = img.size
-            extracted_text, confidence, engine = _perform_image_ocr(img)
+            extracted_text, confidence, engine = _perform_image_ocr(img, language=language)
             cleaned_text = clean_extracted_text(extracted_text)
 
             page = ExtractedPage(
@@ -171,11 +260,11 @@ def process_image_document(file_path: Path) -> DocumentExtractionResult:
         )
 
 
-def process_pdf_document(file_path: Path) -> DocumentExtractionResult:
+def process_pdf_document(file_path: Path, language: str = "en") -> DocumentExtractionResult:
     """
     Process PDF documents:
     - Extracts embedded text directly using PyMuPDF.
-    - If a page has minimal or no embedded text (scanned PDF), rasterizes to image and runs OCR.
+    - If a page has minimal or no embedded text (scanned PDF), rasterizes to image and runs OCR in target language.
     - Aggregates all pages and confidence scores.
     """
     try:
@@ -199,7 +288,6 @@ def process_pdf_document(file_path: Path) -> DocumentExtractionResult:
             cleaned_direct = clean_extracted_text(direct_text)
 
             # Check if page has sufficient extractable text or if it is scanned
-            # If fewer than 20 alphanumeric characters, treat as scanned page
             alpha_chars = sum(1 for c in cleaned_direct if c.isalnum())
             if alpha_chars >= 20:
                 # Digital text PDF page
@@ -215,11 +303,11 @@ def process_pdf_document(file_path: Path) -> DocumentExtractionResult:
                     )
                 )
             else:
-                # Scanned page - rasterize to image and OCR
+                # Scanned page - rasterize to image and OCR with selected language
                 ocr_applied_any = True
                 pix = pdf_page.get_pixmap(dpi=200)
                 img = Image.open(io.BytesIO(pix.tobytes("png")))
-                ocr_text, ocr_conf, ocr_engine = _perform_image_ocr(img)
+                ocr_text, ocr_conf, ocr_engine = _perform_image_ocr(img, language=language)
                 engine_used = f"PyMuPDF+{ocr_engine}"
                 cleaned_ocr = clean_extracted_text(ocr_text)
 
@@ -261,17 +349,20 @@ def process_pdf_document(file_path: Path) -> DocumentExtractionResult:
         )
 
 
-def extract_document_text(file_path: Path, file_type: str) -> DocumentExtractionResult:
+def extract_document_text(
+    file_path: Path, file_type: str, language: str = "en"
+) -> DocumentExtractionResult:
     """
     Main entry point for document text and OCR extraction.
     Dispatches to PDF or Image processor based on file extension and MIME type.
     """
     suffix = file_path.suffix.lower()
+    lang = (language or "en").lower().strip()
 
     if suffix == ".pdf" or "pdf" in file_type.lower():
-        return process_pdf_document(file_path)
+        return process_pdf_document(file_path, language=lang)
     elif suffix in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp") or "image" in file_type.lower():
-        return process_image_document(file_path)
+        return process_image_document(file_path, language=lang)
     else:
         # Fallback for plain text or unknown
         try:
@@ -299,3 +390,4 @@ def extract_document_text(file_path: Path, file_type: str) -> DocumentExtraction
                 ocr_engine="None",
                 is_ocr_applied=False,
             )
+

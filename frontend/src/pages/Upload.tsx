@@ -37,9 +37,12 @@ interface UploadedDocument {
 export default function Upload() {
   const [selectedFile, setSelectedFile] =
     useState<SelectedFile | null>(null);
+  const [selectedLanguage, setSelectedLanguage] =
+    useState<string>("en");
 
   const [isDragging, setIsDragging] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedDocument, setUploadedDocument] =
@@ -179,6 +182,10 @@ export default function Upload() {
         "file",
         selectedFile.file
       );
+      formData.append(
+        "language",
+        selectedLanguage
+      );
 
       const response = await fetch(
         "http://127.0.0.1:8000/api/documents/upload",
@@ -187,6 +194,7 @@ export default function Upload() {
           body: formData,
         }
       );
+
 
       const data = await response.json();
 
@@ -220,7 +228,7 @@ export default function Upload() {
 
       {/* ================= HEADER ================= */}
 
-      <div className="uploadHeader">
+      <div className="uploadHeader" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
         <div>
           <h1>Upload Documents</h1>
 
@@ -229,7 +237,34 @@ export default function Upload() {
             processing and analysis.
           </p>
         </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <label style={{ fontSize: "12px", fontWeight: 600, color: "#6b7280" }}>
+            OCR Language
+          </label>
+          <select
+            value={selectedLanguage}
+            onChange={(e) => setSelectedLanguage(e.target.value)}
+            disabled={isUploading}
+            style={{
+              padding: "8px 12px",
+              borderRadius: "6px",
+              border: "1px solid #d1d5db",
+              backgroundColor: "#ffffff",
+              fontSize: "14px",
+              color: "#374151",
+              fontWeight: 500,
+              cursor: "pointer",
+              outline: "none",
+            }}
+          >
+            <option value="en">English (Default)</option>
+            <option value="hi">Hindi (हिन्दी)</option>
+            <option value="mr">Marathi (मराठी)</option>
+          </select>
+        </div>
       </div>
+
 
       {/* ================= DROPZONE ================= */}
 
@@ -336,6 +371,31 @@ export default function Upload() {
               Preview
             </button>
 
+            {/* LANGUAGE SELECTOR */}
+
+            {!uploadedDocument && (
+              <select
+                value={selectedLanguage}
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+                disabled={isUploading}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  border: "1px solid #d1d5db",
+                  backgroundColor: "#ffffff",
+                  fontSize: "14px",
+                  color: "#374151",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  outline: "none",
+                }}
+              >
+                <option value="en">Language: English</option>
+                <option value="hi">Language: Hindi (हिन्दी)</option>
+                <option value="mr">Language: Marathi (मराठी)</option>
+              </select>
+            )}
+
             {/* UPLOAD */}
 
             {!uploadedDocument && (
@@ -352,6 +412,7 @@ export default function Upload() {
                   : "Upload document"}
               </button>
             )}
+
 
             {/* REMOVE */}
 

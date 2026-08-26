@@ -6,6 +6,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     UploadFile,
@@ -26,7 +27,7 @@ from app.schemas.document import (
     DocumentResponse,
 )
 from app.services.extraction_service import extract_document_report
-from app.services.ocr_service import extract_document_text
+from app.services.ocr_service import SUPPORTED_LANGUAGES, extract_document_text
 from app.services.upload_service import UPLOAD_DIR, save_uploaded_file
 
 logger = logging.getLogger(__name__)
@@ -44,18 +45,27 @@ router = APIRouter(
 )
 async def upload_document(
     file: UploadFile = File(...),
+    language: str = Form("en"),
     db: Session = Depends(get_db),
 ):
     """
-    Upload and process a document through the Engineer A pipeline:
-    1. Validate and save file to local uploads directory
-    2. Create Document record in DB with status 'processing'
-    3. Run OCR / text extraction on supported formats (PDF, images)
-    4. Clean extracted text and extract structured fields
-    5. Score confidences and route low-confidence documents to review queue
-    6. Persist pages, OCR results, and extracted fields
-    7. Update Document status to 'completed' or 'needs_review'
+    Upload and process a document through the document processing pipeline:
+    1. Validate language (en, hi, mr) and file format
+    2. Save file to local uploads directory
+    3. Create Document record in DB with status 'processing'
+    4. Run language-aware OCR / text extraction (PDFs, images)
+    5. Clean extracted text and extract structured fields
+    6. Score confidences and route low-confidence documents to review queue
+    7. Persist pages, OCR results, and extracted fields
+    8. Update Document status to 'completed' or 'needs_review'
     """
+    norm_lang = (language or "en").lower().strip()
+    if norm_lang not in SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported language '{language}'. Supported languages are: {', '.join(sorted(SUPPORTED_LANGUAGES))}.",
+        )
+
     try:
         (
             original_filename,
@@ -81,8 +91,9 @@ async def upload_document(
         db.refresh(document)
 
         try:
-            # 2. Run OCR / Text Extraction
-            ocr_res = extract_document_text(disk_path, content_type)
+            # 2. Run Language-Aware OCR / Text Extraction
+            ocr_res = extract_document_text(disk_path, content_type, language=norm_lang)
+
 
             # 3. Save DocumentPage records
             page_obj_map: dict[int, DocumentPage] = {}
