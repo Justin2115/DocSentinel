@@ -181,7 +181,7 @@ export default function Upload() {
       );
 
       const response = await fetch(
-        "http://127.0.0.1:5000/api/documents/upload",
+        "http://127.0.0.1:8000/api/documents/upload",
         {
           method: "POST",
           body: formData,
