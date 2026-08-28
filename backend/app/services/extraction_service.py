@@ -57,7 +57,7 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "date",
         "patterns": [
-            r"(?i)(?:date\s*of\s*birth|dob)\s*[:\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
+            r"(?i)(?:दिनांक|तारीख|date\s*of\s*birth|dob)\s*[:\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
             r"(?i)(?:invoice\s*date|issue\s*date|billing\s*date|date)\s*[:\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
             r"(?i)(?:date)\s*[:\-\n]?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})",
             r"(?i)(?:date)\s*[:\-\n]?\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
@@ -70,9 +70,9 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "full_name",
         "patterns": [
-            r"(?i)(?:applicant\s*name|candidate\s*name|full\s*name|name\s*of\s*applicant|patient\s*name|employee\s*name)\s*[:\-\n]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})",
-            r"(?i)(?:name)\s*[:\-\n]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})",
-            r"(?i)(?:bill\s*to|sold\s*to|customer\s*name)\s*[:\-\n]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})",
+            r"(?i)(?:applicant\s*name|candidate\s*name|full\s*name|name\s*of\s*applicant|patient\s*name|employee\s*name)\s*[:\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
+            r"(?i)(?:नाम|नाव|name)\s*[:\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
+            r"(?i)(?:bill\s*to|sold\s*to|customer\s*name)\s*[:\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
         ],
         "base_confidence": 85.0,
     },
@@ -80,7 +80,7 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "total_amount",
         "patterns": [
-            r"(?i)(?:grand\s*total|total\s*amount|amount\s*due|total\s*payable|net\s*amount|total)\s*[:\-\n]?\s*(?:[$€£₹]|USD|EUR|GBP|INR|Rs\.?)?\s*([\d,]+\.\d{2})",
+            r"(?i)(?:grand\s*total|total\s*amount|amount\s*due|total\s*payable|net\s*amount|total|एकूण\s*रक्कम|कुल\s*राशि)\s*[:\-\n]?\s*(?:[$€£₹]|USD|EUR|GBP|INR|Rs\.?)?\s*([\d,]+\.\d{2})",
             r"(?i)(?:[$€£₹]|USD|EUR|GBP|INR|Rs\.?)\s*([\d,]+\.\d{2})\b",
             r"(?i)(?:total)\s*[:\-\n]?\s*([\d,]+\.?\d*)",
         ],
@@ -98,7 +98,7 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "phone",
         "patterns": [
-            r"(?i)(?:phone|mobile|tel|contact)\s*[:\-\n]?\s*(\+?\d{1,4}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{2,5}[-.\s]?\d{3,5})",
+            r"(?i)(?:phone|mobile|tel|contact|फोन|मोबाईल)\s*[:\-\n]?\s*(\+?\d{1,4}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{2,5}[-.\s]?\d{3,5})",
             r"\b(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
         ],
         "base_confidence": 87.0,
@@ -116,10 +116,11 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "address",
         "patterns": [
-            r"(?i)(?:address|billing\s*address|shipping\s*address|permanent\s*address)\s*[:\-\n]?\s*([A-Za-z0-9\s,\.\-#\/]{10,80})",
+            r"(?i)(?:address|billing\s*address|shipping\s*address|permanent\s*address|पत्ता|पता)\s*[:\-\n]?\s*([A-Za-z0-9\u0900-\u097F\s,\.\-#\/]{5,80})",
         ],
         "base_confidence": 78.0,
     },
+
 ]
 
 
