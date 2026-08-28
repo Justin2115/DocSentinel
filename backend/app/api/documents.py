@@ -45,26 +45,27 @@ router = APIRouter(
 )
 async def upload_document(
     file: UploadFile = File(...),
-    language: str = Form("en"),
+    language: str = Form("auto"),
     db: Session = Depends(get_db),
 ):
     """
     Upload and process a document through the document processing pipeline:
-    1. Validate language (en, hi, mr) and file format
+    1. Validate language (auto, en, hi, mr) and file format
     2. Save file to local uploads directory
     3. Create Document record in DB with status 'processing'
-    4. Run language-aware OCR / text extraction (PDFs, images)
+    4. Run automatic language-aware OCR / text extraction (PDFs, images)
     5. Clean extracted text and extract structured fields
     6. Score confidences and route low-confidence documents to review queue
     7. Persist pages, OCR results, and extracted fields
     8. Update Document status to 'completed' or 'needs_review'
     """
-    norm_lang = (language or "en").lower().strip()
+    norm_lang = (language or "auto").lower().strip()
     if norm_lang not in SUPPORTED_LANGUAGES:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported language '{language}'. Supported languages are: {', '.join(sorted(SUPPORTED_LANGUAGES))}.",
         )
+
 
     try:
         (
