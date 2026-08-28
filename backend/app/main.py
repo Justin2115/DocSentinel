@@ -1,8 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import create_engine
 
 from app.api.documents import router as documents_router
+from app.core.config import settings
+from app.db.base import Base
+import app.models.document
 
 
 app = FastAPI(
@@ -25,3 +29,9 @@ app.add_middleware(
 
 
 app.include_router(documents_router)
+
+
+@app.on_event("startup")
+def initialize_database() -> None:
+    engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    Base.metadata.create_all(engine)

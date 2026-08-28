@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import SearchIcon from "@mui/icons-material/Search";
 import FilterListIcon from "@mui/icons-material/FilterList";
@@ -10,73 +10,22 @@ import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import DeleteIcon from "@mui/icons-material/Delete";
 import CloseIcon from "@mui/icons-material/Close";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import { deleteDocument, getDocuments } from "../api/document";
+import type { DocumentRecord } from "../api/document";
 
-type DocumentItem = {
-  id: number;
-  name: string;
-  type: "PDF" | "DOCX" | "JPG" | "PNG" | "XLSX";
-  date: string;
-  status: "Processed" | "Needs review" | "Indexed";
-  confidence: string;
-  size: string;
+type DocumentItem = DocumentRecord;
+type DisplayType = "PDF" | "DOCX" | "JPG" | "PNG" | "XLSX" | "DOC" | "XLS";
+
+const displayType = (document: DocumentItem): DisplayType => {
+  const extension = document.original_filename.split(".").pop()?.toUpperCase() || "DOC";
+  return ["PDF", "DOCX", "JPG", "PNG", "XLSX", "DOC", "XLS"].includes(extension)
+    ? extension as DisplayType
+    : "DOC";
 };
-
-const documents: DocumentItem[] = [
-  {
-    id: 1,
-    name: "Invoice_Q2_2024.pdf",
-    type: "PDF",
-    date: "Jul 8, 2025",
-    status: "Processed",
-    confidence: "97%",
-    size: "2.4 MB",
-  },
-  {
-    id: 2,
-    name: "ID_Verification.jpg",
-    type: "JPG",
-    date: "Jul 8, 2025",
-    status: "Needs review",
-    confidence: "63%",
-    size: "1.0 MB",
-  },
-  {
-    id: 3,
-    name: "Contract_NDA.pdf",
-    type: "PDF",
-    date: "Jul 7, 2025",
-    status: "Indexed",
-    confidence: "--",
-    size: "1.8 MB",
-  },
-  {
-    id: 4,
-    name: "Employee_Records.docx",
-    type: "DOCX",
-    date: "Jul 6, 2025",
-    status: "Processed",
-    confidence: "94%",
-    size: "845 KB",
-  },
-  {
-    id: 5,
-    name: "Financial_Report.xlsx",
-    type: "XLSX",
-    date: "Jul 5, 2025",
-    status: "Processed",
-    confidence: "98%",
-    size: "3.2 MB",
-  },
-  {
-    id: 6,
-    name: "Passport_Copy.png",
-    type: "PNG",
-    date: "Jul 4, 2025",
-    status: "Needs review",
-    confidence: "71%",
-    size: "1.6 MB",
-  },
-];
+const displayStatus = (status: string | null): "Processed" | "Needs review" | "Indexed" =>
+  status === "needs_review" ? "Needs review" : status === "completed" ? "Processed" : "Indexed";
+const formatSize = (bytes: number | null) => bytes == null ? "--" : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const formatDate = (date: string | null) => date ? new Date(date).toLocaleDateString() : "--";
 
 const Library = () => {
   const [search, setSearch] = useState("");
@@ -84,24 +33,33 @@ const Library = () => {
   const [statusFilter, setStatusFilter] = useState("All status");
   const [selectedDocument, setSelectedDocument] =
     useState<DocumentItem | null>(null);
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const pageSize = 10;
 
-  const filteredDocuments = useMemo(() => {
-    return documents.filter((document) => {
-      const matchesSearch = document.name
-        .toLowerCase()
-        .includes(search.toLowerCase());
+  useEffect(() => {
+    setLoading(true);
+    setError("");
+    const fileType = typeFilter === "All types" ? undefined : `.${typeFilter.toLowerCase()}`;
+    const status = statusFilter === "All status" ? undefined : statusFilter === "Processed" ? "completed" : statusFilter === "Needs review" ? "needs_review" : "uploaded";
+    getDocuments({ search: search || undefined, file_type: fileType, status, skip: (page - 1) * pageSize, limit: pageSize })
+      .then((response) => { setDocuments(response.data.items); setTotal(response.data.total); })
+      .catch(() => setError("Unable to load documents from the server."))
+      .finally(() => setLoading(false));
+  }, [search, typeFilter, statusFilter, page]);
 
-      const matchesType =
-        typeFilter === "All types" || document.type === typeFilter;
+  const removeDocument = async (id: number) => {
+    setDeletingId(id);
+    try { await deleteDocument(id); setDocuments((current) => current.filter((document) => document.id !== id)); setTotal((current) => current - 1); setSelectedDocument(null); }
+    catch { setError("Unable to delete this document."); }
+    finally { setDeletingId(null); }
+  };
 
-      const matchesStatus =
-        statusFilter === "All status" || document.status === statusFilter;
-
-      return matchesSearch && matchesType && matchesStatus;
-    });
-  }, [search, typeFilter, statusFilter]);
-
-  const getFileIcon = (type: DocumentItem["type"]) => {
+  const getFileIcon = (type: DisplayType) => {
     switch (type) {
       case "PDF":
         return <PictureAsPdfIcon />;
@@ -124,7 +82,7 @@ const Library = () => {
         </div>
 
         <div className="libraryCount">
-          <strong>{filteredDocuments.length}</strong>
+          <strong>{total}</strong>
           <span>documents</span>
         </div>
       </div>
@@ -175,7 +133,7 @@ const Library = () => {
       <div className="libraryTableCard">
         <div className="libraryTableHeader">
           <h2>All Documents</h2>
-          <span>{filteredDocuments.length} results</span>
+          <span>{total} results</span>
         </div>
 
         <div className="libraryTableWrapper">
@@ -192,40 +150,44 @@ const Library = () => {
             </thead>
 
             <tbody>
-              {filteredDocuments.length > 0 ? (
-                filteredDocuments.map((document) => (
+              {loading ? (
+                <tr><td colSpan={6}>Loading documents...</td></tr>
+              ) : error ? (
+                <tr><td colSpan={6}>{error}</td></tr>
+              ) : documents.length > 0 ? (
+                documents.map((document) => (
                   <tr key={document.id}>
                     <td>
                       <div className="documentName">
                         <div className="documentIcon">
-                          {getFileIcon(document.type)}
+                          {getFileIcon(displayType(document))}
                         </div>
                         <div>
-                          <strong>{document.name}</strong>
-                          <span>{document.size}</span>
+                          <strong>{document.original_filename}</strong>
+                          <span>{formatSize(document.file_size)}</span>
                         </div>
                       </div>
                     </td>
 
                     <td>
-                      <span className="fileType">{document.type}</span>
+                      <span className="fileType">{displayType(document)}</span>
                     </td>
 
-                    <td>{document.date}</td>
+                    <td>{formatDate(document.uploaded_at)}</td>
 
                     <td>
                       <span
-                        className={`statusBadge ${document.status
+                        className={`statusBadge ${displayStatus(document.status)
                           .toLowerCase()
                           .replace(" ", "-")}`}
                       >
-                        {document.status}
+                        {displayStatus(document.status)}
                       </span>
                     </td>
 
                     <td>
                       <span className="confidence">
-                        {document.confidence}
+                        {document.overall_confidence != null ? `${Number(document.overall_confidence).toFixed(1)}%` : "--"}
                       </span>
                     </td>
 
@@ -242,6 +204,8 @@ const Library = () => {
                         <button
                           className="iconAction deleteAction"
                           title="Delete"
+                          disabled={deletingId === document.id}
+                          onClick={() => removeDocument(document.id)}
                         >
                          <DeleteIcon />
                         </button>
@@ -265,16 +229,14 @@ const Library = () => {
         </div>
 
         <div className="libraryFooter">
-          <span>
-            Showing {filteredDocuments.length} of {documents.length} documents
+            <span>
+            Showing {documents.length} of {total} documents
           </span>
 
           <div className="pagination">
-            <button disabled>Previous</button>
-            <button className="pageActive">1</button>
-            <button>2</button>
-            <button>3</button>
-            <button>Next</button>
+            <button disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</button>
+            <button className="pageActive">{page}</button>
+            <button disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Next</button>
           </div>
         </div>
       </div>
@@ -291,7 +253,7 @@ const Library = () => {
             <div className="previewHeader">
               <div>
                 <h2>Document Preview</h2>
-                <p>{selectedDocument.name}</p>
+                <p>{selectedDocument.original_filename}</p>
               </div>
 
               <button
@@ -304,13 +266,13 @@ const Library = () => {
 
             <div className="previewContent">
               <div className="previewFileIcon">
-                {getFileIcon(selectedDocument.type)}
+                {getFileIcon(displayType(selectedDocument))}
               </div>
 
-              <h3>{selectedDocument.name}</h3>
+              <h3>{selectedDocument.original_filename}</h3>
 
               <p>
-                {selectedDocument.type} · {selectedDocument.size}
+                {displayType(selectedDocument)} · {formatSize(selectedDocument.file_size)}
               </p>
 
               <div className="previewPlaceholder">

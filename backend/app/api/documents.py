@@ -23,7 +23,9 @@ from app.models.document import (
     ReviewQueue,
 )
 from app.schemas.document import (
+    DashboardStatsResponse,
     DocumentDetailResponse,
+    DocumentListResponse,
     DocumentResponse,
 )
 from app.services.extraction_service import extract_document_report
@@ -201,26 +203,53 @@ async def upload_document(
         await file.close()
 
 
-@router.get(
-    "",
-    response_model=List[DocumentResponse],
-)
+@router.get("", response_model=DocumentListResponse)
 def list_documents(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    search: str | None = Query(None),
+    document_type: str | None = Query(None),
+    file_type: str | None = Query(None),
+    status: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    """
-    List all uploaded documents with pagination.
-    """
-    documents = (
-        db.query(Document)
-        .order_by(Document.uploaded_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
+    query = db.query(Document)
+    if search:
+        query = query.filter(Document.original_filename.ilike(f"%{search.strip()}%"))
+    if document_type:
+        query = query.filter(Document.document_type == document_type)
+    if file_type:
+        query = query.filter(Document.file_type == file_type)
+    if status:
+        query = query.filter(Document.status == status)
+
+    total = query.count()
+    documents = query.order_by(Document.uploaded_at.desc()).offset(skip).limit(limit).all()
+    return DocumentListResponse(items=documents, total=total, skip=skip, limit=limit)
+
+
+@router.get("/stats", response_model=DashboardStatsResponse)
+def dashboard_stats(db: Session = Depends(get_db)):
+    total_documents = db.query(func.count(Document.id)).scalar() or 0
+    processed_today = (
+        db.query(func.count(Document.id))
+        .filter(Document.processed_at.isnot(None), func.date(Document.processed_at) == func.current_date())
+        .scalar()
+        or 0
     )
-    return documents
+    pending_review = db.query(func.count(Document.id)).filter(Document.status == "needs_review").scalar() or 0
+    average_confidence = db.query(func.avg(Document.overall_confidence)).filter(
+        Document.overall_confidence.isnot(None)
+    ).scalar()
+    recent_documents = db.query(Document).order_by(Document.uploaded_at.desc()).limit(5).all()
+
+    return DashboardStatsResponse(
+        total_documents=total_documents,
+        processed_today=processed_today,
+        pending_review=pending_review,
+        average_confidence=round(float(average_confidence), 2) if average_confidence is not None else None,
+        recent_documents=recent_documents,
+    )
 
 
 @router.get(
@@ -252,4 +281,19 @@ def get_document(
             detail=f"Document with ID {document_id} not found.",
         )
 
-    return document
+    return document
+
+
+@router.delete("/{document_id}", status_code=204)
+def delete_document(document_id: int, db: Session = Depends(get_db)):
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    try:
+        db.delete(document)
+        db.commit()
+        (UPLOAD_DIR / document.stored_filename).unlink(missing_ok=True)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to delete document %s", document_id)
+        raise HTTPException(status_code=500, detail="Failed to delete document.")

@@ -11,27 +11,14 @@ import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 
 import { renderAsync } from "docx-preview";
+import { uploadDocument as uploadDocumentRequest } from "../api/document";
+import type { DocumentRecord } from "../api/document";
 
 interface SelectedFile {
   name: string;
   size: number;
   type: string;
   file: File;
-}
-
-interface UploadedDocument {
-  id: number;
-  original_filename: string;
-  stored_filename: string;
-  file_path: string;
-  file_type: string;
-  file_size: number | null;
-  document_type: string | null;
-  status: string | null;
-  uploaded_by: number | null;
-  overall_confidence: number | null;
-  uploaded_at: string | null;
-  processed_at: string | null;
 }
 
 export default function Upload() {
@@ -46,7 +33,7 @@ export default function Upload() {
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedDocument, setUploadedDocument] =
-    useState<UploadedDocument | null>(null);
+    useState<DocumentRecord | null>(null);
 
   const [uploadError, setUploadError] = useState("");
 
@@ -176,36 +163,8 @@ export default function Upload() {
     setUploadedDocument(null);
 
     try {
-      const formData = new FormData();
-
-      formData.append(
-        "file",
-        selectedFile.file
-      );
-      formData.append(
-        "language",
-        selectedLanguage
-      );
-
-      const response = await fetch(
-        "http://127.0.0.1:8000/api/documents/upload",
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
-
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data?.detail ||
-            "Failed to upload document."
-        );
-      }
-
-      setUploadedDocument(data);
+      const response = await uploadDocumentRequest(selectedFile.file, selectedLanguage);
+      setUploadedDocument(response.data);
 
     } catch (error) {
       console.error(
@@ -213,11 +172,9 @@ export default function Upload() {
         error
       );
 
-      setUploadError(
-        error instanceof Error
-          ? error.message
-          : "Something went wrong while uploading."
-      );
+      const message = (error as { response?: { data?: { detail?: string } } })
+        .response?.data?.detail;
+      setUploadError(message || (error instanceof Error ? error.message : "Something went wrong while uploading."));
     } finally {
       setIsUploading(false);
     }
