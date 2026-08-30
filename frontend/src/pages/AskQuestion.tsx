@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+
 import SendOutlinedIcon from "@mui/icons-material/SendOutlined";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
@@ -11,11 +13,59 @@ const sampleQuestions = [
   "Which documents need review?",
 ];
 
+type Message = {
+  type: "user" | "ai";
+  text: string;
+};
+
 const AskQuestion = () => {
+  const [searchParams] = useSearchParams();
+
   const [question, setQuestion] = useState("");
-  const [messages, setMessages] = useState<
-    { type: "user" | "ai"; text: string }[]
-  >([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+
+  const processedQuery = useRef<string | null>(null);
+
+  /*
+   * Read a question passed from the global TopBar.
+   *
+   * Example:
+   * /ask?q=Find%20all%20invoices
+   */
+  useEffect(() => {
+    const query = searchParams.get("q");
+
+    if (!query) {
+      return;
+    }
+
+    if (processedQuery.current === query) {
+      return;
+    }
+
+    processedQuery.current = query;
+
+    setQuestion(query);
+
+    /*
+     * Automatically send the question.
+     *
+     * At the moment the project does not have the
+     * Ask/RAG API connected to this page, so this
+     * adds the user's question to the chat.
+     *
+     * The backend answer will be connected later.
+     */
+    setMessages((previous) => [
+      ...previous,
+      {
+        type: "user",
+        text: query,
+      },
+    ]);
+
+    setQuestion("");
+  }, [searchParams]);
 
   const handleSampleQuestion = (sample: string) => {
     setQuestion(sample);
@@ -24,7 +74,9 @@ const AskQuestion = () => {
   const handleSend = () => {
     const trimmedQuestion = question.trim();
 
-    if (!trimmedQuestion) return;
+    if (!trimmedQuestion) {
+      return;
+    }
 
     setMessages((previous) => [
       ...previous,
@@ -42,6 +94,7 @@ const AskQuestion = () => {
       <div className="askQuestionHeader">
         <div>
           <h1>Ask a Question</h1>
+
           <p>
             Ask questions about your documents and get AI-powered answers.
           </p>
@@ -78,6 +131,7 @@ const AskQuestion = () => {
                       onClick={() => handleSampleQuestion(sample)}
                     >
                       <AutoAwesomeOutlinedIcon />
+
                       <span>{sample}</span>
                     </button>
                   ))}
@@ -109,6 +163,7 @@ const AskQuestion = () => {
         <div className="chatBottom">
           <div className="selectedDocument">
             <DescriptionOutlinedIcon />
+
             <span>All documents</span>
           </div>
 

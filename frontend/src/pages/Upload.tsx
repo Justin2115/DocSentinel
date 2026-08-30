@@ -11,6 +11,7 @@ import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 
 import { renderAsync } from "docx-preview";
+
 import { uploadDocument as uploadDocumentRequest } from "../api/document";
 import type { DocumentRecord } from "../api/document";
 
@@ -21,20 +22,60 @@ interface SelectedFile {
   file: File;
 }
 
+type OCRLanguage = "auto" | "en" | "hi" | "mr" | "en+hi" | "en+mr";
+
+const OCR_LANGUAGES: {
+  value: OCRLanguage;
+  label: string;
+}[] = [
+  {
+    value: "auto",
+    label: "Auto Detect",
+  },
+  {
+    value: "en",
+    label: "English",
+  },
+  {
+    value: "hi",
+    label: "Hindi",
+  },
+  {
+    value: "mr",
+    label: "Marathi",
+  },
+  {
+    value: "en+hi",
+    label: "English + Hindi",
+  },
+  {
+    value: "en+mr",
+    label: "English + Marathi",
+  },
+];
+
 export default function Upload() {
   const [selectedFile, setSelectedFile] =
     useState<SelectedFile | null>(null);
 
-  const [isDragging, setIsDragging] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+  const [isDragging, setIsDragging] =
+    useState(false);
 
+  const [showPreview, setShowPreview] =
+    useState(false);
 
+  const [isUploading, setIsUploading] =
+    useState(false);
 
-  const [isUploading, setIsUploading] = useState(false);
   const [uploadedDocument, setUploadedDocument] =
     useState<DocumentRecord | null>(null);
 
-  const [uploadError, setUploadError] = useState("");
+  const [uploadError, setUploadError] =
+    useState("");
+
+  // OCR language selector
+  const [selectedLanguage, setSelectedLanguage] =
+    useState<OCRLanguage>("auto");
 
   const docxContainerRef =
     useRef<HTMLDivElement | null>(null);
@@ -146,66 +187,68 @@ export default function Upload() {
     return <InsertDriveFileOutlinedIcon />;
   };
 
-  /*S============================
- * UPLOAD TO FASTAPI
- * ============================
- */
+  /* ============================
+   * UPLOAD TO FASTAPI
+   * ============================ */
 
-const uploadDocument = async () => {
-  if (!selectedFile || isUploading) {
-    return;
-  }
+  const uploadDocument = async () => {
+    if (!selectedFile || isUploading) {
+      return;
+    }
 
-  setIsUploading(true);
-  setUploadError("");
-  setUploadedDocument(null);
+    setIsUploading(true);
+    setUploadError("");
+    setUploadedDocument(null);
 
-  try {
-    const response = await uploadDocumentRequest(
-      selectedFile.file,
-      selectedLanguage
-    );
+    try {
+      const response = await uploadDocumentRequest(
+        selectedFile.file,
+        selectedLanguage
+      );
 
-    setUploadedDocument(response.data);
-  } catch (error) {
-    console.error(
-      "Upload error:",
-      error
-    );
+      setUploadedDocument(response.data);
+    } catch (error) {
+      console.error(
+        "Upload error:",
+        error
+      );
 
-    const message = (error as {
-      response?: {
-        data?: {
-          detail?: string;
-        };
-      };
-    }).response?.data?.detail;
+      const message = (
+        error as {
+          response?: {
+            data?: {
+              detail?: string;
+            };
+          };
+        }
+      ).response?.data?.detail;
 
-    setUploadError(
-      message ||
-        (error instanceof Error
-          ? error.message
-          : "Something went wrong while uploading.")
-    );
-  } finally {
-    setIsUploading(false);
-  }
-};
+      setUploadError(
+        message ||
+          (error instanceof Error
+            ? error.message
+            : "Something went wrong while uploading.")
+      );
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
-return (
-  <div className="uploadPage">
+  return (
+    <div className="uploadPage">
 
-    {/* ================= HEADER ================= */}
-    <div className="uploadHeader">
-      <div>
-        <h1>Upload Documents</h1>
+      {/* ================= HEADER ================= */}
 
-        <p>
-          Add documents to your library for
-          processing and analysis.
-        </p>
+      <div className="uploadHeader">
+        <div>
+          <h1>Upload Documents</h1>
+
+          <p>
+            Add documents to your library for
+            processing and analysis.
+          </p>
+        </div>
       </div>
-    </div>
 
       {/* ================= DROPZONE ================= */}
 
@@ -250,6 +293,47 @@ return (
           <br />
           Maximum file size: 25 MB
         </span>
+
+        {/* ================= OCR LANGUAGE ================= */}
+
+        <div
+          className="ocrLanguageSelector"
+          onClick={(event) =>
+            event.stopPropagation()
+          }
+        >
+          <label
+            htmlFor="ocr-language"
+            className="ocrLanguageLabel"
+          >
+            OCR Language
+          </label>
+
+          <select
+            id="ocr-language"
+            className="ocrLanguageSelect"
+            value={selectedLanguage}
+            onChange={(event) =>
+              setSelectedLanguage(
+                event.target.value as OCRLanguage
+              )
+            }
+            disabled={isUploading}
+          >
+            {OCR_LANGUAGES.map((language) => (
+              <option
+                key={language.value}
+                value={language.value}
+              >
+                {language.label}
+              </option>
+            ))}
+          </select>
+
+          <span className="ocrLanguageHint">
+            Choose the document language for OCR.
+          </span>
+        </div>
       </div>
 
       {/* ================= SELECTED FILE ================= */}
@@ -328,8 +412,6 @@ return (
                   : "Upload document"}
               </button>
             )}
-
-
 
             {/* REMOVE */}
 
@@ -439,6 +521,7 @@ return (
 
           <div className="supportedItem">
             <PictureAsPdfOutlinedIcon />
+
             <span>
               PDF documents
             </span>
@@ -446,6 +529,7 @@ return (
 
           <div className="supportedItem">
             <DescriptionOutlinedIcon />
+
             <span>
               Word documents
             </span>
@@ -453,6 +537,7 @@ return (
 
           <div className="supportedItem">
             <InsertDriveFileOutlinedIcon />
+
             <span>
               Images & spreadsheets
             </span>
