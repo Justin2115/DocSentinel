@@ -28,8 +28,13 @@ from app.schemas.document import (
     DocumentListResponse,
     DocumentResponse,
 )
+from app.services.embedding_service import (
+    delete_document_embeddings,
+    schedule_document_indexing,
+)
 from app.services.extraction_service import extract_document_report
 from app.services.ocr_service import SUPPORTED_LANGUAGES, extract_document_text
+from app.services.search_service import semantic_matching_document_ids
 from app.services.upload_service import UPLOAD_DIR, save_uploaded_file
 
 logger = logging.getLogger(__name__)
@@ -103,10 +108,22 @@ async def upload_document(
             # OCR
             # ------------------------------------------------
 
+            logger.info(
+                "Starting OCR for document %s (%s, lang=%s)",
+                document.id,
+                original_filename,
+                norm_lang,
+            )
             ocr_res = extract_document_text(
                 disk_path,
                 content_type,
                 language=norm_lang,
+            )
+            logger.info(
+                "OCR finished for document %s engine=%s pages=%s",
+                document.id,
+                ocr_res.ocr_engine,
+                len(ocr_res.pages),
             )
 
             # ------------------------------------------------
@@ -218,6 +235,7 @@ async def upload_document(
 
             db.commit()
             db.refresh(document)
+            schedule_document_indexing(document.id)
 
         except Exception as proc_error:
 
@@ -296,14 +314,11 @@ def list_documents(
     db: Session = Depends(get_db),
 ):
     """
-    List documents with pagination, filtering and keyword search.
+    List documents with pagination, filtering and hybrid search.
 
-    Keyword search checks:
-    - original filename
-    - OCR extracted text
-    - extracted field names
-    - extracted field values
-    - corrected field values
+    When `search` is provided, results include:
+    - keyword matches (filename, OCR text, extracted fields)
+    - semantic matches from the vector index
     """
 
     query = (
@@ -325,32 +340,24 @@ def list_documents(
     if search and search.strip():
 
         search_term = f"%{search.strip()}%"
-
-        query = query.filter(
-            or_(
-                Document.original_filename.ilike(search_term),
-
-                OCRResult.extracted_text.ilike(
-                    search_term
-                ),
-
-                ExtractedField.field_name.ilike(
-                    search_term
-                ),
-
-                ExtractedField.field_value.ilike(
-                    search_term
-                ),
-
-                ExtractedField.original_value.ilike(
-                    search_term
-                ),
-
-                ExtractedField.corrected_value.ilike(
-                    search_term
-                ),
-            )
+        semantic_ids = semantic_matching_document_ids(db, search.strip())
+        keyword_match = or_(
+            Document.original_filename.ilike(search_term),
+            OCRResult.extracted_text.ilike(search_term),
+            ExtractedField.field_name.ilike(search_term),
+            ExtractedField.field_value.ilike(search_term),
+            ExtractedField.original_value.ilike(search_term),
+            ExtractedField.corrected_value.ilike(search_term),
         )
+        if semantic_ids:
+            query = query.filter(
+                or_(
+                    keyword_match,
+                    Document.id.in_(semantic_ids),
+                )
+            )
+        else:
+            query = query.filter(keyword_match)
 
     # --------------------------------------------------------
     # DOCUMENT TYPE
@@ -572,6 +579,7 @@ def delete_document(
 
     try:
 
+        delete_document_embeddings(db, document.id)
         db.delete(document)
         db.commit()
 

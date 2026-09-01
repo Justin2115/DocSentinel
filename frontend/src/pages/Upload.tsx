@@ -457,6 +457,9 @@ export default function Upload() {
             <span>
               Document ID:{" "}
               {uploadedDocument.id}
+              {uploadedDocument.status
+                ? ` · Status: ${uploadedDocument.status}`
+                : ""}
             </span>
           </div>
         </div>

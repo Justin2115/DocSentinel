@@ -107,6 +107,12 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
+    embedding_index: Mapped[list["EmbeddingIndex"]] = relationship(
+        "EmbeddingIndex",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+
 
 class DocumentPage(Base):
     __tablename__ = "document_pages"
@@ -337,4 +343,7 @@ class ReviewQueue(Base):
     document: Mapped["Document"] = relationship(
         "Document",
         back_populates="review_items",
-    )
+    )
+
+
+from app.models.embedding import EmbeddingIndex  # noqa: E402,F401

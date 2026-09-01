@@ -1,4 +1,4 @@
-import apiClient from "./axios";
+import apiClient from "./client";
 
 export interface DocumentRecord {
 	id: number;

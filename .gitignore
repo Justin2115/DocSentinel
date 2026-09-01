@@ -3,9 +3,15 @@
 # =========================
 
 venv/
+.venv/
 *venv*/
 backend/venv/
+backend/.venv/
 backend/*venv*/
+backend/regional-ocr/
+Lib/
+Include/
+Scripts/
 __pycache__/
 
 
@@ -71,3 +77,4 @@ backend/uploads/
 # =========================
 
 vector_db/chroma/
+backend/vector_db/

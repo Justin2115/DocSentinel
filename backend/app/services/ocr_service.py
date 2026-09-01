@@ -393,6 +393,8 @@ def _perform_image_ocr(
         except Exception as e:
             logger.exception(f"PaddleOCR extraction failed: {e}")
 
+    logger.info("PaddleOCR unavailable; falling back to RapidOCR")
+
 
     # Fallback to RapidOCR if PaddleOCR fails
     rapid_engine = get_rapid_ocr_engine()

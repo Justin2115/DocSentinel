@@ -6031,3 +6031,150 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+.librarySearchCluster {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.searchModeToggle {
+    display: flex;
+    height: 46px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+}
+
+.searchModeToggle button {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: 8px;
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.searchModeToggle button.active {
+    background: var(--primary);
+    color: #fff;
+}
+
+.searchResultsCard {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px;
+}
+
+.searchResultsList {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.searchResultsStatus {
+    margin: 18px;
+    color: var(--text-secondary);
+}
+
+.searchHitButton {
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    padding: 14px;
+    cursor: pointer;
+}
+
+.searchHitHeader {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+}
+
+.searchHitMeta {
+    display: flex;
+    gap: 10px;
+    margin: 6px 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.searchHitSnippet {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.similarityBadge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    background: #eef2ff;
+    color: #4338ca;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 3px 8px;
+}
+
+.messageColumn {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 78%;
+}
+
+.sourceCards {
+    display: grid;
+    gap: 8px;
+}
+
+.sourceCard {
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #fff;
+    padding: 12px;
+    cursor: pointer;
+}
+
+.sourceCardHeader {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+}
+
+.sourceCardMeta {
+    display: block;
+    margin: 4px 0 8px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.sourceCard p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.statusBadge.indexed {
+    background: #ecfdf3;
+    color: #067647;
+}
+
+.statusBadge.failed {
+    background: #fef3f2;
+    color: #b42318;
+}
