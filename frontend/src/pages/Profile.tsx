@@ -1,30 +1,43 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import EmailOutlinedIcon from "@mui/icons-material/EmailOutlined";
 import PhoneOutlinedIcon from "@mui/icons-material/PhoneOutlined";
 import ShieldOutlinedIcon from "@mui/icons-material/ShieldOutlined";
+import { useAuth } from "../context/AuthContext";
 
 export default function Profile() {
+  const { user } = useAuth();
   const saved = localStorage.getItem("profile");
 
-  const initialProfile = saved
-    ? JSON.parse(saved)
-    : {
-        name: "Elvina Binoy",
-        email: "elvina@docsentinel.io",
-        phone: "",
-        role: "Admin",
-      };
+  const initialProfile = {
+    name: user?.name || (saved ? JSON.parse(saved).name : "User"),
+    email: user?.email || (saved ? JSON.parse(saved).email : ""),
+    phone: saved ? JSON.parse(saved).phone || "" : "",
+    role: user?.role
+      ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
+      : saved
+      ? JSON.parse(saved).role || "User"
+      : "User",
+  };
 
   const [profile, setProfile] = useState(initialProfile);
   const [editing, setEditing] = useState(false);
   const [savedMessage, setSavedMessage] = useState(false);
 
+  useEffect(() => {
+    if (user) {
+      setProfile((prev) => ({
+        ...prev,
+        name: user.name,
+        email: user.email,
+        role: user.role.charAt(0).toUpperCase() + user.role.slice(1),
+      }));
+    }
+  }, [user]);
+
   const handleSave = () => {
     localStorage.setItem("profile", JSON.stringify(profile));
-
     window.dispatchEvent(new Event("profileUpdated"));
-
     setEditing(false);
     setSavedMessage(true);
 
@@ -70,10 +83,23 @@ export default function Profile() {
 
       <div className="profileGrid">
         <section className="profileCard profileOverview">
-          <div className="largeAvatar">{initials}</div>
+          {user?.profile_picture ? (
+            <img
+              src={user.profile_picture}
+              alt={profile.name}
+              style={{
+                width: 80,
+                height: 80,
+                borderRadius: "50%",
+                objectFit: "cover",
+                margin: "0 auto 16px",
+              }}
+            />
+          ) : (
+            <div className="largeAvatar">{initials}</div>
+          )}
 
           <h2>{profile.name}</h2>
-
           <p>{profile.email}</p>
 
           <span className="roleBadge">
