@@ -1,5 +1,7 @@
 import axios from "axios";
 
+export const isRequestCanceled = (error: unknown) => axios.isCancel(error);
+
 const apiBase = (
 	import.meta.env.VITE_API_BASE_URL as string | undefined
 )?.replace(/\/$/, "") || "http://127.0.0.1:8000";

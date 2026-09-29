@@ -12,6 +12,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import CloseIcon from "@mui/icons-material/Close";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 
+import { isRequestCanceled } from "../api/client";
 import {
 	deleteDocument,
 	getDocument,
@@ -85,6 +86,12 @@ const Library = () => {
 	const [hits, setHits] = useState<SearchResultHit[]>([]);
 	const [total, setTotal] = useState(0);
 	const [page, setPage] = useState(1);
+	const listKey = `${debouncedSearch}|${searchMode}|${typeFilter}|${statusFilter}`;
+	const [listKeySeen, setListKeySeen] = useState(listKey);
+	if (listKey !== listKeySeen) {
+		setListKeySeen(listKey);
+		setPage(1);
+	}
 	const [loading, setLoading] = useState(true);
 	const [searchLoading, setSearchLoading] = useState(false);
 	const [error, setError] = useState("");
@@ -114,10 +121,6 @@ const Library = () => {
 	}, []);
 
 	useEffect(() => {
-		setPage(1);
-	}, [debouncedSearch, typeFilter, statusFilter, searchMode]);
-
-	useEffect(() => {
 		if (!selectedDocument) {
 			return;
 		}
@@ -139,12 +142,15 @@ const Library = () => {
 	}, [selectedDocument]);
 
 	useEffect(() => {
+		const controller = new AbortController();
+		const { signal } = controller;
+
 		setLoading(true);
 		setSearchLoading(showingSearch);
 		setError("");
 
 		if (showingSearch && searchMode === "semantic") {
-			searchSemantic(debouncedSearch)
+			searchSemantic(debouncedSearch, 10, 0.2, signal)
 				.then((response) => {
 					setHits(
 						response.data.items.map((hit) => ({
@@ -155,35 +161,42 @@ const Library = () => {
 					setTotal(response.data.total);
 					setDocuments([]);
 				})
-				.catch(() =>
-					setError("Unable to run semantic search.")
-				)
+				.catch((error) => {
+					if (!isRequestCanceled(error)) {
+						setError("Unable to run semantic search.");
+					}
+				})
 				.finally(() => {
-					setLoading(false);
-					setSearchLoading(false);
+					if (!signal.aborted) {
+						setLoading(false);
+						setSearchLoading(false);
+					}
 				});
-			return;
+			return () => controller.abort();
 		}
 
 		if (showingSearch && searchMode === "keyword") {
-			searchDocuments(
-				debouncedSearch,
-				(page - 1) * pageSize,
-				pageSize
-			)
+			searchDocuments(debouncedSearch, (page - 1) * pageSize, pageSize, {
+				mode: "keyword",
+				signal,
+			})
 				.then((response) => {
 					setHits(response.data.items);
 					setTotal(response.data.total);
 					setDocuments([]);
 				})
-				.catch(() =>
-					setError("Unable to search documents.")
-				)
+				.catch((error) => {
+					if (!isRequestCanceled(error)) {
+						setError("Unable to search documents.");
+					}
+				})
 				.finally(() => {
-					setLoading(false);
-					setSearchLoading(false);
+					if (!signal.aborted) {
+						setLoading(false);
+						setSearchLoading(false);
+					}
 				});
-			return;
+			return () => controller.abort();
 		}
 
 		const status =
@@ -197,11 +210,14 @@ const Library = () => {
 							? "indexed"
 							: undefined;
 
-		getDocuments({
-			status,
-			skip: (page - 1) * pageSize,
-			limit: pageSize,
-		})
+		getDocuments(
+			{
+				status,
+				skip: (page - 1) * pageSize,
+				limit: pageSize,
+			},
+			signal
+		)
 			.then((response) => {
 				const items =
 					typeFilter === "All types"
@@ -218,13 +234,19 @@ const Library = () => {
 						: items.length
 				);
 			})
-			.catch(() =>
-				setError("Unable to load documents from the server.")
-			)
+			.catch((error) => {
+				if (!isRequestCanceled(error)) {
+					setError("Unable to load documents from the server.");
+				}
+			})
 			.finally(() => {
-				setLoading(false);
-				setSearchLoading(false);
+				if (!signal.aborted) {
+					setLoading(false);
+					setSearchLoading(false);
+				}
 			});
+
+		return () => controller.abort();
 	}, [
 		debouncedSearch,
 		typeFilter,

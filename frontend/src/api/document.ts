@@ -92,12 +92,14 @@ export interface DocumentQuery {
 }
 
 export const getDocuments = (
-	params: DocumentQuery = {}
+	params: DocumentQuery = {},
+	signal?: AbortSignal
 ) =>
 	apiClient.get<DocumentListResponse>(
 		"/documents",
 		{
 			params,
+			signal,
 		}
 	);
 
