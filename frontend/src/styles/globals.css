@@ -518,11 +518,22 @@ main{
   margin-bottom:28px;
 }
 
-.statsGrid{
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:20px;
-  margin-bottom:36px;
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 36px;
+}
+@media (max-width: 1300px) {
+  .statsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .statsGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .statsCard{
@@ -1550,11 +1561,14 @@ tr:hover{
     justify-content:center;
     padding:30px;
     background:rgba(17,24,39,.42);
+    overscroll-behavior: contain;
 }
 
 .previewModal{
     width:min(720px,100%);
     max-height:90vh;
+    display:flex;
+    flex-direction:column;
     background:white;
     border-radius:20px;
     overflow:hidden;
@@ -1597,6 +1611,10 @@ tr:hover{
 .previewContent{
     padding:35px;
     text-align:center;
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    overscroll-behavior:contain;
 }
 
 .previewFileIcon{
@@ -1699,11 +1717,21 @@ tr:hover{
     color:#98A2B3;
 }
 
+.previewHeader,
+.previewFooter{
+    flex-shrink:0;
+}
+
 .previewFooter{
     display:flex;
     justify-content:flex-end;
     padding:16px 24px;
     border-top:1px solid var(--border);
+}
+
+html.previewOpen,
+body.previewOpen {
+    overflow: hidden !important;
 }
 
 .previewCancel{
@@ -2598,9 +2626,9 @@ tr:hover{
 
     /* DASHBOARD */
 
-    .statsGrid {
-        grid-template-columns: repeat(2, 1fr);
-    }
+   .statsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+   }
 
     .recentDocuments {
         overflow-x: auto;
@@ -3565,15 +3593,7 @@ tr:hover {
     }
 }
 
-@media (max-width: 900px) {
-    .sidebar {
-        width: 220px;
-        min-width: 220px;
-    }
 
-    .content {
-        margin-left: 0 !important;
-    }
 
     main {
         padding: 24px;
@@ -3593,8 +3613,24 @@ tr:hover {
         gap: 18px;
     }
 
-    .reviewSummary {
-        grid-template-columns: 1fr;
+@media (max-width: 900px) {
+    .sidebar {
+        width: 220px;
+        min-width: 220px;
+    }
+
+    .content {
+        min-width: 0;
+        width: 100%;
+    }
+
+    main {
+        padding: 24px;
+        min-width: 0;
+    }
+
+    .statsGrid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .settingsTabs {
@@ -5389,4 +5425,786 @@ tr:hover {
 :root.dark .reviewBottomActions {
   background: #1f1f22 !important;
   border-top-color: #35353a !important;
+}
+/* =========================================================
+   RESPONSIVE APP LAYOUT
+   ========================================================= */
+
+.appLayout {
+  min-height: 100vh;
+  background: var(--background);
+}
+
+/* Fixed sidebar */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+
+  width: var(--sidebar-width);
+  height: 100vh;
+
+  z-index: 1000;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  flex-shrink: 0;
+
+  transition:
+    width 0.25s ease,
+    transform 0.25s ease;
+
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+}
+
+/* Collapsed sidebar */
+.sidebar.collapsed {
+  width: var(--sidebar-collapsed-width);
+}
+
+/* Main content */
+.appLayout .content {
+  min-width: 0;
+  width: calc(100% - var(--sidebar-width));
+  margin-left: var(--sidebar-width);
+
+  transition:
+    margin-left 0.25s ease,
+    width 0.25s ease;
+}
+
+/* When sidebar is collapsed */
+.sidebar.collapsed + .content {
+  width: calc(100% - var(--sidebar-collapsed-width));
+  margin-left: var(--sidebar-collapsed-width);
+}
+
+/* Main page spacing */
+.appLayout main {
+  width: 100%;
+  min-width: 0;
+  padding: 34px;
+}
+@media (max-width: 1100px) {
+  .appLayout main {
+    padding: 28px;
+  }
+}
+
+@media (max-width: 700px) {
+  .appLayout main {
+    padding: 20px 16px;
+  }
+}
+
+/* ========================================================================== */
+/* DOCSENTINEL — FINAL RESPONSIVE LAYOUT FIX                                 */
+/* This section intentionally comes LAST so it overrides older duplicate      */
+/* responsive rules elsewhere in the stylesheet.                              */
+/* ========================================================================== */
+
+:root {
+  --sidebar-width: 276px;
+  --sidebar-collapsed-width: 78px;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+}
+
+html,
+body {
+  overflow-x: hidden;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Fixed sidebar: stays visible while the page itself scrolls                 */
+/* -------------------------------------------------------------------------- */
+
+.appLayout {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+.appLayout .sidebar {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  bottom: 0 !important;
+  width: var(--sidebar-width) !important;
+  min-width: var(--sidebar-width) !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  max-height: 100vh;
+  max-height: 100dvh;
+  display: flex !important;
+  flex-direction: column !important;
+  flex-shrink: 0;
+  box-sizing: border-box !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  padding: 18px 20px;
+  z-index: 9999 !important;
+}
+
+.appLayout .sidebar nav {
+  flex: 0 0 auto;
+}
+
+.appLayout .sidebarBottom {
+  margin-top: auto !important;
+  flex: 0 0 auto;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Content always reserves exactly the sidebar width                         */
+/* -------------------------------------------------------------------------- */
+
+.appLayout > .content,
+.appLayout .content {
+  display: block;
+  width: calc(100% - var(--sidebar-width)) !important;
+  min-width: 0 !important;
+  max-width: calc(100% - var(--sidebar-width));
+  margin-left: var(--sidebar-width) !important;
+  box-sizing: border-box;
+}
+
+.appLayout .content > * {
+  max-width: 100%;
+}
+
+.appLayout main {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Collapsed state */
+.appLayout .sidebar.collapsed {
+  width: var(--sidebar-collapsed-width) !important;
+  min-width: var(--sidebar-collapsed-width) !important;
+}
+
+.appLayout .sidebar.collapsed + .content,
+.appLayout:has(.sidebar.collapsed) .content {
+  width: calc(100% - var(--sidebar-collapsed-width)) !important;
+  max-width: calc(100% - var(--sidebar-collapsed-width));
+  margin-left: var(--sidebar-collapsed-width) !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Desktop / laptop                                                          */
+/* -------------------------------------------------------------------------- */
+
+@media (min-width: 1201px) {
+  .appLayout .sidebar {
+    width: var(--sidebar-width) !important;
+    min-width: var(--sidebar-width) !important;
+  }
+
+  .appLayout .content {
+    width: calc(100% - var(--sidebar-width)) !important;
+    max-width: calc(100% - var(--sidebar-width));
+    margin-left: var(--sidebar-width) !important;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Smaller laptops / tablets in landscape                                     */
+/* Keep the full sidebar so every navigation option remains available.       */
+/* -------------------------------------------------------------------------- */
+
+@media (min-width: 701px) and (max-width: 1200px) {
+  .appLayout .sidebar {
+    width: 220px !important;
+    min-width: 220px !important;
+  }
+
+  .appLayout .content {
+    width: calc(100% - 220px) !important;
+    max-width: calc(100% - 220px);
+    margin-left: 220px !important;
+  }
+
+  .appLayout main {
+    padding: 28px !important;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Phones                                                                    */
+/* Use an icon-only fixed rail. It does NOT become part of the page flow,     */
+/* so scrolling never pushes Dark mode / Collapse out of place.               */
+/* -------------------------------------------------------------------------- */
+
+@media (max-width: 700px) {
+  .appLayout .sidebar {
+    width: var(--sidebar-collapsed-width) !important;
+    min-width: var(--sidebar-collapsed-width) !important;
+    padding: 14px 10px !important;
+    overflow-y: auto !important;
+  }
+
+  .appLayout .sidebar .brandText,
+  .appLayout .sidebar nav span,
+  .appLayout .sidebarBottom span {
+    display: none !important;
+  }
+
+  .appLayout .brand {
+    justify-content: center;
+    padding: 0;
+    margin-bottom: 22px;
+  }
+
+  .appLayout .brandLogo {
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+  }
+
+  .appLayout .navItem,
+  .appLayout .modeButton,
+  .appLayout .collapseButton {
+    justify-content: center;
+  }
+
+  .appLayout .content {
+    width: calc(100% - var(--sidebar-collapsed-width)) !important;
+    max-width: calc(100% - var(--sidebar-collapsed-width));
+    margin-left: var(--sidebar-collapsed-width) !important;
+  }
+
+  .appLayout main {
+    padding: 20px 16px !important;
+  }
+
+  .topbar {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .searchBox {
+    width: min(100%, 320px);
+    min-width: 0;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Prevent wide cards/grids from creating horizontal overflow                 */
+/* -------------------------------------------------------------------------- */
+
+.dashboard,
+.libraryPage,
+.uploadPage,
+.reviewPage,
+.settingsPage,
+.dashboard > *,
+.libraryPage > *,
+.uploadPage > *,
+.reviewPage > *,
+.settingsPage > * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.statsGrid {
+  width: 100%;
+  min-width: 0;
+}
+
+.statsCard,
+.recentDocs,
+.libraryTableCard,
+.reviewCard,
+.reviewSummaryCard,
+.uploadDropzone,
+.uploadInfoCard,
+.selectedFileCard,
+.chatContainer,
+.settingsTable,
+.permissionTable,
+.thresholdCard,
+.routingRule {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Tables may scroll inside their own wrapper rather than expanding the page. */
+.libraryTableWrapper,
+.tableWrapper,
+.reviewTableWrapper {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Review workspace should shrink instead of forcing the whole page wider. */
+.reviewWorkspace,
+.reviewWorkspaceInner {
+  min-width: 0;
+  max-width: 100%;
+}
+
+
+/* ==========================================================================
+   DOCSENTINEL — REVIEW QUEUE FINAL FIX
+   IMPORTANT: This only corrects the Review Queue sizing/positioning.
+   The sidebar, topbar, dashboard, library, upload and settings layout are
+   intentionally left unchanged.
+   ========================================================================== */
+
+/* Desktop: let the review page use the complete content area instead of
+   being constrained/centered inside a narrower max-width container. */
+.appLayout .reviewPage {
+    width: 100% !important;
+    max-width: none !important;
+    margin: -14px 0 0 !important;
+    padding: 18px 32px 40px !important;
+    box-sizing: border-box !important;
+}
+
+  .appLayout .reviewWorkspace {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    margin: 20px 0 0 !important;
+    grid-template-columns: 330px minmax(0, 1fr) !important;
+  }
+
+  .appLayout .reviewWorkspaceInner {
+    width: 100% !important;
+    min-width: 0 !important;
+    grid-template-columns: minmax(0, 1fr) 400px !important;
+  }
+
+  .appLayout .reviewList,
+  .appLayout .documentViewer,
+  .appLayout .extractedPanel {
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+
+/* Medium screens: keep all three review sections usable without making the
+   entire page horizontally scroll. */
+@media (min-width: 701px) and (max-width: 1250px) {
+  .appLayout .reviewPage {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .appLayout .reviewWorkspace {
+    width: 100% !important;
+    max-width: none !important;
+    grid-template-columns: 270px minmax(0, 1fr) !important;
+  }
+
+  .appLayout .reviewWorkspaceInner {
+    min-width: 0 !important;
+    grid-template-columns: minmax(0, 1fr) 330px !important;
+  }
+}
+
+/* Phones/tablets keep the existing stacked review behaviour. */
+@media (max-width: 700px) {
+  .appLayout .reviewPage {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .appLayout .reviewWorkspace {
+    width: 100% !important;
+    max-width: none !important;
+  }
+}
+/* =========================================================
+   REVIEW QUEUE — HEADER POSITION FIX
+   ========================================================= */
+
+@media (min-width: 901px) {
+
+    .reviewPage {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 18px 32px 40px !important;
+    box-sizing: border-box !important;
+}
+
+    .reviewHeader {
+        width: 100% !important;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: flex-start !important;
+        justify-content: space-between !important;
+        gap: 30px !important;
+        margin: 0 0 28px !important;
+    }
+
+    .reviewHeader > div:first-child {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+    }
+
+    .reviewHeader h1 {
+        margin: 0 !important;
+    }
+
+    .reviewHeader p {
+        margin: 8px 0 0 !important;
+    }
+
+    .reviewThreshold {
+        flex: 0 0 auto !important;
+        margin: 0 !important;
+        align-self: flex-start !important;
+    }
+
+    .reviewWorkspace {
+        width: 100% !important;
+        max-width: none !important;
+        margin: 0 !important;
+        min-width: 0 !important;
+    }
+}
+/* ===================== OCR LANGUAGE SELECTOR ===================== */
+
+.ocrLanguageSelector {
+  width: min(420px, 100%);
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  text-align: left;
+}
+
+.ocrLanguageLabel {
+  margin-bottom: 7px;
+  color: var(--text-primary, #111827);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ocrLanguageSelect {
+  width: 100%;
+  height: 44px;
+  padding: 0 40px 0 14px;
+
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+
+  background: var(--surface, #ffffff);
+  color: var(--text-primary, #111827);
+
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+
+  outline: none;
+  cursor: pointer;
+
+  appearance: auto;
+
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.ocrLanguageSelect:hover {
+  border-color: var(--primary, #0b7a5c);
+}
+
+.ocrLanguageSelect:focus {
+  border-color: var(--primary, #0b7a5c);
+  box-shadow: 0 0 0 3px rgba(11, 122, 92, 0.12);
+}
+
+.ocrLanguageSelect:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ocrLanguageHint {
+  margin-top: 6px;
+  color: var(--text-secondary, #667085);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Make the dropzone tall enough for the selector */
+
+.uploadDropzone {
+  min-height: 390px;
+}
+
+/* Keep the language selector comfortable on smaller screens */
+
+@media (max-width: 700px) {
+  .ocrLanguageSelector {
+    width: 100%;
+    max-width: 360px;
+  }
+
+  .uploadDropzone {
+    min-height: 390px;
+  }
+}
+/* ===================== LIBRARY DOCUMENT DETAILS ===================== */
+
+.previewDetails {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 20px;
+}
+
+.previewDetails > div {
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+}
+
+.previewDetails strong {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.previewDetails span {
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.previewOCR {
+    width: 100%;
+    margin-top: 22px;
+    text-align: left;
+}
+
+.previewOCR h4 {
+    margin: 0 0 10px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.ocrResult {
+    margin-bottom: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+}
+
+.ocrResultHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 7px;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.ocrResult p {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+    .previewDetails {
+        grid-template-columns: 1fr;
+    }
+}
+
+.librarySearchCluster {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.searchModeToggle {
+    display: flex;
+    height: 46px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+}
+
+.searchModeToggle button {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: 8px;
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.searchModeToggle button.active {
+    background: var(--primary);
+    color: #fff;
+}
+
+.searchResultsCard {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px;
+}
+
+.searchResultsList {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.searchResultsStatus {
+    margin: 18px;
+    color: var(--text-secondary);
+}
+
+.searchHitButton {
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    padding: 14px;
+    cursor: pointer;
+}
+
+.searchHitHeader {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+}
+
+.searchHitMeta {
+    display: flex;
+    gap: 10px;
+    margin: 6px 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.searchHitSnippet {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.searchHighlight {
+    background: #fde68a;
+    color: inherit;
+    padding: 0 2px;
+    border-radius: 3px;
+    font-weight: 700;
+}
+
+:root.dark .searchHighlight {
+    background: #854d0e;
+    color: #fef3c7;
+}
+
+.similarityBadge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    background: #eef2ff;
+    color: #4338ca;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 3px 8px;
+}
+
+.messageColumn {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 78%;
+}
+
+.sourceCards {
+    display: grid;
+    gap: 8px;
+}
+
+.sourceCard {
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #fff;
+    padding: 12px;
+    cursor: pointer;
+}
+
+.sourceCardHeader {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+}
+
+.sourceCardMeta {
+    display: block;
+    margin: 4px 0 8px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.sourceCard p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.statusBadge.indexed {
+    background: #ecfdf3;
+    color: #067647;
+}
+
+.statusBadge.failed {
+    background: #fef3f2;
+    color: #b42318;
 }

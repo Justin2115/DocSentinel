@@ -11,7 +11,7 @@ from fastapi import (
     Query,
     UploadFile,
 )
-from sqlalchemy import func, select
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import get_db
@@ -23,11 +23,18 @@ from app.models.document import (
     ReviewQueue,
 )
 from app.schemas.document import (
+    DashboardStatsResponse,
     DocumentDetailResponse,
+    DocumentListResponse,
     DocumentResponse,
+)
+from app.services.embedding_service import (
+    delete_document_embeddings,
+    schedule_document_indexing,
 )
 from app.services.extraction_service import extract_document_report
 from app.services.ocr_service import SUPPORTED_LANGUAGES, extract_document_text
+from app.services.search_service import semantic_matching_document_ids
 from app.services.upload_service import UPLOAD_DIR, save_uploaded_file
 
 logger = logging.getLogger(__name__)
@@ -38,6 +45,10 @@ router = APIRouter(
 )
 
 
+# ============================================================
+# UPLOAD DOCUMENT
+# ============================================================
+
 @router.post(
     "/upload",
     response_model=DocumentResponse,
@@ -45,27 +56,24 @@ router = APIRouter(
 )
 async def upload_document(
     file: UploadFile = File(...),
-    language: str = Form("auto"),
+    language: str = Form("en"),
     db: Session = Depends(get_db),
 ):
     """
-    Upload and process a document through the document processing pipeline:
-    1. Validate language (auto, en, hi, mr) and file format
-    2. Save file to local uploads directory
-    3. Create Document record in DB with status 'processing'
-    4. Run automatic language-aware OCR / text extraction (PDFs, images)
-    5. Clean extracted text and extract structured fields
-    6. Score confidences and route low-confidence documents to review queue
-    7. Persist pages, OCR results, and extracted fields
-    8. Update Document status to 'completed' or 'needs_review'
+    Upload and process a document through the document processing pipeline.
     """
-    norm_lang = (language or "auto").lower().strip()
+
+    norm_lang = (language or "en").lower().strip()
+
     if norm_lang not in SUPPORTED_LANGUAGES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported language '{language}'. Supported languages are: {', '.join(sorted(SUPPORTED_LANGUAGES))}.",
+            detail=(
+                f"Unsupported language '{language}'. "
+                f"Supported languages are: "
+                f"{', '.join(sorted(SUPPORTED_LANGUAGES))}."
+            ),
         )
-
 
     try:
         (
@@ -78,7 +86,10 @@ async def upload_document(
         file_path = str(Path("uploads") / stored_filename)
         content_type = file.content_type or "application/octet-stream"
 
-        # 1. Create initial Document record in DB
+        # ----------------------------------------------------
+        # Create initial document
+        # ----------------------------------------------------
+
         document = Document(
             original_filename=original_filename,
             stored_filename=stored_filename,
@@ -87,18 +98,42 @@ async def upload_document(
             file_size=file_size,
             status="processing",
         )
+
         db.add(document)
         db.commit()
         db.refresh(document)
 
         try:
-            # 2. Run Language-Aware OCR / Text Extraction
-            ocr_res = extract_document_text(disk_path, content_type, language=norm_lang)
+            # ------------------------------------------------
+            # OCR
+            # ------------------------------------------------
 
+            logger.info(
+                "Starting OCR for document %s (%s, lang=%s)",
+                document.id,
+                original_filename,
+                norm_lang,
+            )
+            ocr_res = extract_document_text(
+                disk_path,
+                content_type,
+                language=norm_lang,
+            )
+            logger.info(
+                "OCR finished for document %s engine=%s pages=%s",
+                document.id,
+                ocr_res.ocr_engine,
+                len(ocr_res.pages),
+            )
 
-            # 3. Save DocumentPage records
+            # ------------------------------------------------
+            # Save pages + OCR results
+            # ------------------------------------------------
+
             page_obj_map: dict[int, DocumentPage] = {}
+
             if ocr_res.pages:
+
                 for p in ocr_res.pages:
                     doc_page = DocumentPage(
                         document_id=document.id,
@@ -107,13 +142,20 @@ async def upload_document(
                         width=p.width,
                         height=p.height,
                     )
+
                     db.add(doc_page)
                     page_obj_map[p.page_number] = doc_page
+
                 db.flush()
 
-                # Save per-page OCR results
                 for p in ocr_res.pages:
-                    page_id = page_obj_map.get(p.page_number).id if p.page_number in page_obj_map else None
+
+                    page_id = (
+                        page_obj_map[p.page_number].id
+                        if p.page_number in page_obj_map
+                        else None
+                    )
+
                     ocr_row = OCRResult(
                         document_id=document.id,
                         page_id=page_id,
@@ -121,9 +163,11 @@ async def upload_document(
                         confidence=p.confidence,
                         ocr_engine=ocr_res.ocr_engine,
                     )
+
                     db.add(ocr_row)
+
             else:
-                # Document-level OCR result fallback
+
                 ocr_row = OCRResult(
                     document_id=document.id,
                     page_id=None,
@@ -131,39 +175,59 @@ async def upload_document(
                     confidence=ocr_res.overall_ocr_confidence,
                     ocr_engine=ocr_res.ocr_engine,
                 )
+
                 db.add(ocr_row)
 
-            # 4. Run Structured Field Extraction
+            # ------------------------------------------------
+            # Structured extraction
+            # ------------------------------------------------
+
             report = extract_document_report(ocr_res)
 
-            # Save Extracted Fields
-            for f in report.fields:
-                page_id = page_obj_map.get(f.page_number).id if f.page_number in page_obj_map else None
+            for field in report.fields:
+
+                page_id = (
+                    page_obj_map[field.page_number].id
+                    if field.page_number in page_obj_map
+                    else None
+                )
+
                 field_row = ExtractedField(
                     document_id=document.id,
                     page_id=page_id,
-                    field_name=f.field_name,
-                    field_value=f.field_value,
-                    confidence=f.confidence,
-                    original_value=f.original_value,
-                    corrected_value=f.corrected_value,
-                    is_verified=f.is_verified,
+                    field_name=field.field_name,
+                    field_value=field.field_value,
+                    confidence=field.confidence,
+                    original_value=field.original_value,
+                    corrected_value=field.corrected_value,
+                    is_verified=field.is_verified,
                 )
+
                 db.add(field_row)
 
-            # 5. Handle Confidence & Review Queue
+            # ------------------------------------------------
+            # Review queue
+            # ------------------------------------------------
+
             final_status = "completed"
+
             if report.requires_review:
+
                 final_status = "needs_review"
+
                 review_item = ReviewQueue(
                     document_id=document.id,
                     reason=report.review_reason,
                     confidence=report.overall_confidence,
                     status="pending",
                 )
+
                 db.add(review_item)
 
-            # 6. Update Document status and metrics
+            # ------------------------------------------------
+            # Update document
+            # ------------------------------------------------
+
             document.document_type = report.document_type
             document.overall_confidence = report.overall_confidence
             document.status = final_status
@@ -171,13 +235,20 @@ async def upload_document(
 
             db.commit()
             db.refresh(document)
+            schedule_document_indexing(document.id)
 
         except Exception as proc_error:
-            logger.error(f"Error during document processing pipeline: {proc_error}", exc_info=True)
+
+            logger.error(
+                f"Error during document processing pipeline: {proc_error}",
+                exc_info=True,
+            )
+
             db.rollback()
-            # Mark document as failed
+
             document.status = "failed"
             document.processed_at = func.now()
+
             db.add(document)
             db.commit()
             db.refresh(document)
@@ -185,44 +256,254 @@ async def upload_document(
         return document
 
     except ValueError as error:
+
         raise HTTPException(
             status_code=400,
             detail=str(error),
         )
 
     except Exception as error:
+
         db.rollback()
-        logger.error(f"Document upload error: {error}", exc_info=True)
+
+        logger.error(
+            f"Document upload error: {error}",
+            exc_info=True,
+        )
+
         raise HTTPException(
             status_code=500,
             detail="Failed to upload and process document.",
         )
 
     finally:
+
         await file.close()
 
 
+# ============================================================
+# LIST DOCUMENTS + KEYWORD SEARCH
+# ============================================================
+
 @router.get(
     "",
-    response_model=List[DocumentResponse],
+    response_model=DocumentListResponse,
 )
 def list_documents(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
+    skip: int = Query(
+        0,
+        ge=0,
+    ),
+    limit: int = Query(
+        50,
+        ge=1,
+        le=100,
+    ),
+    search: str | None = Query(
+        None,
+    ),
+    document_type: str | None = Query(
+        None,
+    ),
+    file_type: str | None = Query(
+        None,
+    ),
+    status: str | None = Query(
+        None,
+    ),
     db: Session = Depends(get_db),
 ):
     """
-    List all uploaded documents with pagination.
+    List documents with pagination, filtering and hybrid search.
+
+    When `search` is provided, results include:
+    - keyword matches (filename, OCR text, extracted fields)
+    - semantic matches from the vector index
     """
-    documents = (
+
+    query = (
         db.query(Document)
-        .order_by(Document.uploaded_at.desc())
+        .outerjoin(
+            OCRResult,
+            OCRResult.document_id == Document.id,
+        )
+        .outerjoin(
+            ExtractedField,
+            ExtractedField.document_id == Document.id,
+        )
+    )
+
+    # --------------------------------------------------------
+    # KEYWORD SEARCH
+    # --------------------------------------------------------
+
+    if search and search.strip():
+
+        search_term = f"%{search.strip()}%"
+        semantic_ids = semantic_matching_document_ids(db, search.strip())
+        keyword_match = or_(
+            Document.original_filename.ilike(search_term),
+            OCRResult.extracted_text.ilike(search_term),
+            ExtractedField.field_name.ilike(search_term),
+            ExtractedField.field_value.ilike(search_term),
+            ExtractedField.original_value.ilike(search_term),
+            ExtractedField.corrected_value.ilike(search_term),
+        )
+        if semantic_ids:
+            query = query.filter(
+                or_(
+                    keyword_match,
+                    Document.id.in_(semantic_ids),
+                )
+            )
+        else:
+            query = query.filter(keyword_match)
+
+    # --------------------------------------------------------
+    # DOCUMENT TYPE
+    # --------------------------------------------------------
+
+    if document_type:
+        query = query.filter(
+            Document.document_type == document_type
+        )
+
+    # --------------------------------------------------------
+    # FILE TYPE
+    # --------------------------------------------------------
+
+    if file_type:
+        query = query.filter(
+            Document.file_type == file_type
+        )
+
+    # --------------------------------------------------------
+    # STATUS
+    # --------------------------------------------------------
+
+    if status:
+        query = query.filter(
+            Document.status == status
+        )
+
+    # --------------------------------------------------------
+    # Remove duplicate documents caused by joins
+    # --------------------------------------------------------
+
+    query = query.distinct()
+
+    # --------------------------------------------------------
+    # Total results
+    # --------------------------------------------------------
+
+    total = query.count()
+
+    # --------------------------------------------------------
+    # Pagination
+    # --------------------------------------------------------
+
+    documents = (
+        query
+        .order_by(
+            Document.uploaded_at.desc()
+        )
         .offset(skip)
         .limit(limit)
         .all()
     )
-    return documents
 
+    return DocumentListResponse(
+        items=documents,
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+# ============================================================
+# DASHBOARD STATS
+# ============================================================
+
+@router.get(
+    "/stats",
+    response_model=DashboardStatsResponse,
+)
+def dashboard_stats(
+    db: Session = Depends(get_db),
+):
+    total_documents = (
+        db.query(
+            func.count(Document.id)
+        ).scalar()
+        or 0
+    )
+
+    processed_today = (
+        db.query(
+            func.count(Document.id)
+        )
+        .filter(
+            Document.processed_at.isnot(None),
+            func.date(
+                Document.processed_at
+            )
+            == func.current_date(),
+        )
+        .scalar()
+        or 0
+    )
+
+    pending_review = (
+        db.query(
+            func.count(Document.id)
+        )
+        .filter(
+            Document.status == "needs_review"
+        )
+        .scalar()
+        or 0
+    )
+
+    average_confidence = (
+        db.query(
+            func.avg(
+                Document.overall_confidence
+            )
+        )
+        .filter(
+            Document.overall_confidence.isnot(None)
+        )
+        .scalar()
+    )
+
+    recent_documents = (
+        db.query(Document)
+        .order_by(
+            Document.uploaded_at.desc()
+        )
+        .limit(5)
+        .all()
+    )
+
+    return DashboardStatsResponse(
+        total_documents=total_documents,
+        processed_today=processed_today,
+        pending_review=pending_review,
+        average_confidence=(
+            round(
+                float(average_confidence),
+                2,
+            )
+            if average_confidence is not None
+            else None
+        ),
+        recent_documents=recent_documents,
+    )
+
+
+# ============================================================
+# GET ONE DOCUMENT
+# ============================================================
 
 @router.get(
     "/{document_id}",
@@ -233,8 +514,15 @@ def get_document(
     db: Session = Depends(get_db),
 ):
     """
-    Get detailed document information including pages, OCR text, extracted fields, and review queue items.
+    Get complete document details including:
+
+    - document metadata
+    - pages
+    - OCR results
+    - extracted fields
+    - review queue information
     """
+
     document = (
         db.query(Document)
         .options(
@@ -243,14 +531,75 @@ def get_document(
             selectinload(Document.extracted_fields),
             selectinload(Document.review_items),
         )
-        .filter(Document.id == document_id)
+        .filter(
+            Document.id == document_id
+        )
         .first()
     )
 
     if not document:
+
         raise HTTPException(
             status_code=404,
-            detail=f"Document with ID {document_id} not found.",
+            detail=(
+                f"Document with ID "
+                f"{document_id} not found."
+            ),
         )
 
-    return document
+    return document
+
+
+# ============================================================
+# DELETE DOCUMENT
+# ============================================================
+
+@router.delete(
+    "/{document_id}",
+    status_code=204,
+)
+def delete_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id
+        )
+        .first()
+    )
+
+    if not document:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    try:
+
+        delete_document_embeddings(db, document.id)
+        db.delete(document)
+        db.commit()
+
+        (
+            UPLOAD_DIR
+            / document.stored_filename
+        ).unlink(
+            missing_ok=True
+        )
+
+    except Exception:
+
+        db.rollback()
+
+        logger.exception(
+            "Failed to delete document %s",
+            document_id,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete document.",
+        )

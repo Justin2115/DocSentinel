@@ -12,6 +12,9 @@ import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 
 import { renderAsync } from "docx-preview";
 
+import { uploadDocument as uploadDocumentRequest } from "../api/document";
+import type { DocumentRecord } from "../api/document";
+
 interface SelectedFile {
   name: string;
   size: number;
@@ -19,35 +22,60 @@ interface SelectedFile {
   file: File;
 }
 
-interface UploadedDocument {
-  id: number;
-  original_filename: string;
-  stored_filename: string;
-  file_path: string;
-  file_type: string;
-  file_size: number | null;
-  document_type: string | null;
-  status: string | null;
-  uploaded_by: number | null;
-  overall_confidence: number | null;
-  uploaded_at: string | null;
-  processed_at: string | null;
-}
+type OCRLanguage = "auto" | "en" | "hi" | "mr" | "en+hi" | "en+mr";
+
+const OCR_LANGUAGES: {
+  value: OCRLanguage;
+  label: string;
+}[] = [
+  {
+    value: "auto",
+    label: "Auto Detect",
+  },
+  {
+    value: "en",
+    label: "English",
+  },
+  {
+    value: "hi",
+    label: "Hindi",
+  },
+  {
+    value: "mr",
+    label: "Marathi",
+  },
+  {
+    value: "en+hi",
+    label: "English + Hindi",
+  },
+  {
+    value: "en+mr",
+    label: "English + Marathi",
+  },
+];
 
 export default function Upload() {
   const [selectedFile, setSelectedFile] =
     useState<SelectedFile | null>(null);
 
-  const [isDragging, setIsDragging] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+  const [isDragging, setIsDragging] =
+    useState(false);
 
+  const [showPreview, setShowPreview] =
+    useState(false);
 
+  const [isUploading, setIsUploading] =
+    useState(false);
 
-  const [isUploading, setIsUploading] = useState(false);
   const [uploadedDocument, setUploadedDocument] =
-    useState<UploadedDocument | null>(null);
+    useState<DocumentRecord | null>(null);
 
-  const [uploadError, setUploadError] = useState("");
+  const [uploadError, setUploadError] =
+    useState("");
+
+  // OCR language selector
+  const [selectedLanguage, setSelectedLanguage] =
+    useState<OCRLanguage>("auto");
 
   const docxContainerRef =
     useRef<HTMLDivElement | null>(null);
@@ -159,11 +187,9 @@ export default function Upload() {
     return <InsertDriveFileOutlinedIcon />;
   };
 
-  /*
-   * ============================
+  /* ============================
    * UPLOAD TO FASTAPI
-   * ============================
-   */
+   * ============================ */
 
   const uploadDocument = async () => {
     if (!selectedFile || isUploading) {
@@ -175,44 +201,33 @@ export default function Upload() {
     setUploadedDocument(null);
 
     try {
-      const formData = new FormData();
-
-      formData.append(
-        "file",
-        selectedFile.file
+      const response = await uploadDocumentRequest(
+        selectedFile.file,
+        selectedLanguage
       );
 
-      const response = await fetch(
-        "http://127.0.0.1:8000/api/documents/upload",
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
-
-
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data?.detail ||
-            "Failed to upload document."
-        );
-      }
-
-      setUploadedDocument(data);
-
+      setUploadedDocument(response.data);
     } catch (error) {
       console.error(
         "Upload error:",
         error
       );
 
+      const message = (
+        error as {
+          response?: {
+            data?: {
+              detail?: string;
+            };
+          };
+        }
+      ).response?.data?.detail;
+
       setUploadError(
-        error instanceof Error
-          ? error.message
-          : "Something went wrong while uploading."
+        message ||
+          (error instanceof Error
+            ? error.message
+            : "Something went wrong while uploading.")
       );
     } finally {
       setIsUploading(false);
@@ -223,6 +238,7 @@ export default function Upload() {
     <div className="uploadPage">
 
       {/* ================= HEADER ================= */}
+
       <div className="uploadHeader">
         <div>
           <h1>Upload Documents</h1>
@@ -233,8 +249,6 @@ export default function Upload() {
           </p>
         </div>
       </div>
-
-
 
       {/* ================= DROPZONE ================= */}
 
@@ -279,6 +293,47 @@ export default function Upload() {
           <br />
           Maximum file size: 25 MB
         </span>
+
+        {/* ================= OCR LANGUAGE ================= */}
+
+        <div
+          className="ocrLanguageSelector"
+          onClick={(event) =>
+            event.stopPropagation()
+          }
+        >
+          <label
+            htmlFor="ocr-language"
+            className="ocrLanguageLabel"
+          >
+            OCR Language
+          </label>
+
+          <select
+            id="ocr-language"
+            className="ocrLanguageSelect"
+            value={selectedLanguage}
+            onChange={(event) =>
+              setSelectedLanguage(
+                event.target.value as OCRLanguage
+              )
+            }
+            disabled={isUploading}
+          >
+            {OCR_LANGUAGES.map((language) => (
+              <option
+                key={language.value}
+                value={language.value}
+              >
+                {language.label}
+              </option>
+            ))}
+          </select>
+
+          <span className="ocrLanguageHint">
+            Choose the document language for OCR.
+          </span>
+        </div>
       </div>
 
       {/* ================= SELECTED FILE ================= */}
@@ -358,8 +413,6 @@ export default function Upload() {
               </button>
             )}
 
-
-
             {/* REMOVE */}
 
             <button
@@ -404,6 +457,9 @@ export default function Upload() {
             <span>
               Document ID:{" "}
               {uploadedDocument.id}
+              {uploadedDocument.status
+                ? ` · Status: ${uploadedDocument.status}`
+                : ""}
             </span>
           </div>
         </div>
@@ -468,6 +524,7 @@ export default function Upload() {
 
           <div className="supportedItem">
             <PictureAsPdfOutlinedIcon />
+
             <span>
               PDF documents
             </span>
@@ -475,6 +532,7 @@ export default function Upload() {
 
           <div className="supportedItem">
             <DescriptionOutlinedIcon />
+
             <span>
               Word documents
             </span>
@@ -482,6 +540,7 @@ export default function Upload() {
 
           <div className="supportedItem">
             <InsertDriveFileOutlinedIcon />
+
             <span>
               Images & spreadsheets
             </span>

@@ -1,12 +1,14 @@
 import NotificationsNoneIcon from "@mui/icons-material/NotificationsNone";
 import SearchIcon from "@mui/icons-material/Search";
-import AccountCircleIcon from "@mui/icons-material/AccountCircle";import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import AccountCircleIcon from "@mui/icons-material/AccountCircle";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 export default function TopBar() {
   const [open, setOpen] = useState(false);
+
   const [profile, setProfile] = useState(() => {
     const saved = localStorage.getItem("profile");
 
@@ -19,6 +21,8 @@ export default function TopBar() {
           role: "Admin",
         };
   });
+
+  const [searchQuery, setSearchQuery] = useState("");
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -68,16 +72,48 @@ export default function TopBar() {
     navigate("/login");
   };
 
+  const handleSearch = () => {
+    const trimmedQuery = searchQuery.trim();
+
+    if (!trimmedQuery) {
+      navigate("/ask");
+      return;
+    }
+
+    navigate(`/ask?q=${encodeURIComponent(trimmedQuery)}`);
+
+    setSearchQuery("");
+  };
+
   return (
     <header className="topbar">
       <div className="searchBox">
         <SearchIcon />
 
-        <input placeholder="Ask about any document..." />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              handleSearch();
+            }
+          }}
+          onFocus={() => {
+            // If the user clicks the search box without typing,
+            // they can still press Enter to open Ask a Question.
+          }}
+          placeholder="Ask about any document..."
+          aria-label="Ask about any document"
+        />
       </div>
 
       <div className="topbarRight">
-        <button className="notificationButton">
+        <button
+          type="button"
+          className="notificationButton"
+          aria-label="Notifications"
+        >
           <NotificationsNoneIcon />
 
           <span className="notificationDot" />
@@ -85,6 +121,7 @@ export default function TopBar() {
 
         <div className="profileWrapper" ref={dropdownRef}>
           <button
+            type="button"
             className="profile"
             onClick={() => setOpen((prev) => !prev)}
           >
@@ -111,6 +148,7 @@ export default function TopBar() {
               <div className="dropdownDivider" />
 
               <button
+                type="button"
                 className="dropdownItem"
                 onClick={() => {
                   setOpen(false);
@@ -122,6 +160,7 @@ export default function TopBar() {
               </button>
 
               <button
+                type="button"
                 className="dropdownItem logoutItem"
                 onClick={logout}
               >

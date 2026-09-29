@@ -90,4 +90,19 @@ class DocumentDetailResponse(DocumentResponse):
 
     model_config = ConfigDict(
         from_attributes=True
-    )
+    )
+
+
+class DocumentListResponse(BaseModel):
+    items: list[DocumentResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+class DashboardStatsResponse(BaseModel):
+    total_documents: int
+    processed_today: int
+    pending_review: int
+    average_confidence: float | None = None
+    recent_documents: list[DocumentResponse]

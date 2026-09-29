@@ -4,6 +4,12 @@ __pycache__/
 
 # Virtual Environment
 venv/
+.venv/
+regional-ocr/
+Lib/
+Include/
+Scripts/
+share/
 
 # Environment
 .env
