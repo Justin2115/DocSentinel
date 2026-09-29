@@ -118,6 +118,27 @@ const Library = () => {
 	}, [debouncedSearch, typeFilter, statusFilter, searchMode]);
 
 	useEffect(() => {
+		if (!selectedDocument) {
+			return;
+		}
+
+		const html = document.documentElement;
+		const previousHtmlOverflow = html.style.overflow;
+		const previousBodyOverflow = document.body.style.overflow;
+		html.classList.add("previewOpen");
+		document.body.classList.add("previewOpen");
+		html.style.overflow = "hidden";
+		document.body.style.overflow = "hidden";
+
+		return () => {
+			html.classList.remove("previewOpen");
+			document.body.classList.remove("previewOpen");
+			html.style.overflow = previousHtmlOverflow;
+			document.body.style.overflow = previousBodyOverflow;
+		};
+	}, [selectedDocument]);
+
+	useEffect(() => {
 		setLoading(true);
 		setSearchLoading(showingSearch);
 		setError("");
@@ -389,6 +410,7 @@ const Library = () => {
 			{showingSearch ? (
 				<SearchResults
 					hits={hits}
+					query={debouncedSearch}
 					loading={searchLoading}
 					emptyMessage={
 						error
@@ -526,6 +548,8 @@ const Library = () => {
 				<div
 					className="previewOverlay"
 					onClick={() => setSelectedDocument(null)}
+					onWheel={(event) => event.stopPropagation()}
+					onTouchMove={(event) => event.stopPropagation()}
 				>
 					<div
 						className="previewModal"

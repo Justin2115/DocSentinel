@@ -1,4 +1,5 @@
 import logging
+import re
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -8,28 +9,99 @@ from app.schemas.search import SearchHit, SearchResponse
 
 logger = logging.getLogger(__name__)
 
-SNIPPET_RADIUS = 100
+SNIPPET_RADIUS = 120
+_TOKEN_SPLIT = re.compile(r"[^\w\u0900-\u097F]+", re.UNICODE)
 
 
-def make_snippet(text: str, query: str, radius: int = SNIPPET_RADIUS) -> str:
+def _snippet_needles(query: str, extra_terms: list[str] | None = None) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        token = (value or "").strip()
+        key = token.lower()
+        if len(token) < 2 or key in seen:
+            return
+        seen.add(key)
+        ordered.append(token)
+
+    add(query)
+    for part in _TOKEN_SPLIT.split(query or ""):
+        add(part)
+    for term in extra_terms or []:
+        add(term)
+    return ordered
+
+
+def _earliest_match(source: str, needles: list[str]) -> tuple[int, int]:
+    haystack = source.lower()
+    best_index = -1
+    best_length = 0
+    for needle in needles:
+        index = haystack.find(needle.lower())
+        if index < 0:
+            continue
+        if best_index < 0 or index < best_index:
+            best_index = index
+            best_length = len(needle)
+    return best_index, best_length
+
+
+def _line_bounds(source: str, index: int, match_end: int) -> tuple[int, int]:
+    line_start = source.rfind("\n", 0, index) + 1
+    newline_at_end = source.find("\n", match_end)
+    line_end = len(source) if newline_at_end < 0 else newline_at_end
+
+    if line_start > 0:
+        previous_break = source.rfind("\n", 0, line_start - 1)
+        line_start = 0 if previous_break < 0 else previous_break + 1
+
+    if line_end < len(source):
+        next_break = source.find("\n", line_end + 1)
+        line_end = len(source) if next_break < 0 else next_break
+
+    return line_start, line_end
+
+
+def make_snippet(
+    text: str,
+    query: str,
+    radius: int = SNIPPET_RADIUS,
+    extra_terms: list[str] | None = None,
+) -> str:
+    """Keep the matched line(s) in view instead of a long document tail."""
     source = text or ""
     if not source:
         return ""
 
-    needle = query.strip().lower()
-    haystack = source.lower()
-    index = haystack.find(needle) if needle else -1
+    needles = _snippet_needles(query, extra_terms)
+    query_needles = _snippet_needles(query)
+    index, match_len = _earliest_match(source, query_needles)
+    if index < 0:
+        extra_only = [
+            term for term in needles if term.lower() not in {item.lower() for item in query_needles}
+        ]
+        index, match_len = _earliest_match(source, extra_only)
 
     if index < 0:
-        snippet = source[: radius * 2]
-        return snippet.strip() + ("…" if len(source) > len(snippet) else "")
+        snippet = source[: radius * 2].strip()
+        return snippet + ("…" if len(source) > len(snippet) else "")
 
-    start = max(0, index - radius)
-    end = min(len(source), index + len(query.strip()) + radius)
-    snippet = source[start:end].strip()
-    prefix = "…" if start > 0 else ""
-    suffix = "…" if end < len(source) else ""
-    return f"{prefix}{snippet}{suffix}"
+    match_end = index + max(match_len, 1)
+    line_start, line_end = _line_bounds(source, index, match_end)
+    window = source[line_start:line_end].strip()
+
+    if len(window) > radius * 3:
+        start = max(0, index - radius)
+        end = min(len(source), match_end + radius)
+        window = source[start:end].strip()
+        prefix = "…" if start > 0 else ""
+        suffix = "…" if end < len(source) else ""
+        return f"{prefix}{window}{suffix}"
+
+    prefix = "…" if line_start > 0 else ""
+    suffix = "…" if line_end < len(source) else ""
+    return f"{prefix}{window}{suffix}"
 
 
 def _occurrence_score(text: str | None, query: str, base: float) -> float:
@@ -138,7 +210,24 @@ def keyword_search(
     hits.sort(key=lambda hit: hit.score or 0, reverse=True)
     total = len(hits)
     page_hits = hits[skip : skip + limit]
+    _attach_related_highlights(term, page_hits)
     return SearchResponse(items=page_hits, total=total, skip=skip, limit=limit)
+
+
+def _attach_related_highlights(query: str, hits: list[SearchHit]) -> None:
+    if not hits:
+        return
+    try:
+        from app.services.embedding_service import related_terms_in_texts
+
+        related = related_terms_in_texts(
+            query,
+            [f"{hit.document_name} {hit.snippet}" for hit in hits],
+        )
+        for hit, terms in zip(hits, related):
+            hit.highlight_terms = terms
+    except Exception:
+        logger.exception("Could not compute related highlight terms")
 
 
 def hybrid_search(
@@ -191,6 +280,7 @@ def hybrid_search(
                     snippet=hit.snippet,
                     match_field="semantic",
                     score=hit.similarity,
+                    highlight_terms=hit.highlight_terms,
                 )
             )
 

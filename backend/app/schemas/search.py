@@ -8,6 +8,7 @@ class SearchHit(BaseModel):
     snippet: str
     match_field: str
     score: float | None = None
+    highlight_terms: list[str] = []
 
 
 class SearchResponse(BaseModel):
@@ -25,6 +26,7 @@ class SemanticSearchHit(BaseModel):
     snippet: str
     similarity: float
     match_type: str = "semantic"
+    highlight_terms: list[str] = []
 
 
 class SemanticSearchResponse(BaseModel):

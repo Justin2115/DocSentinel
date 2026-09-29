@@ -1561,11 +1561,14 @@ tr:hover{
     justify-content:center;
     padding:30px;
     background:rgba(17,24,39,.42);
+    overscroll-behavior: contain;
 }
 
 .previewModal{
     width:min(720px,100%);
     max-height:90vh;
+    display:flex;
+    flex-direction:column;
     background:white;
     border-radius:20px;
     overflow:hidden;
@@ -1608,6 +1611,10 @@ tr:hover{
 .previewContent{
     padding:35px;
     text-align:center;
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    overscroll-behavior:contain;
 }
 
 .previewFileIcon{
@@ -1710,11 +1717,21 @@ tr:hover{
     color:#98A2B3;
 }
 
+.previewHeader,
+.previewFooter{
+    flex-shrink:0;
+}
+
 .previewFooter{
     display:flex;
     justify-content:flex-end;
     padding:16px 24px;
     border-top:1px solid var(--border);
+}
+
+html.previewOpen,
+body.previewOpen {
+    overflow: hidden !important;
 }
 
 .previewCancel{
@@ -6115,6 +6132,19 @@ body {
     color: var(--text-primary);
     font-size: 13px;
     line-height: 1.55;
+}
+
+.searchHighlight {
+    background: #fde68a;
+    color: inherit;
+    padding: 0 2px;
+    border-radius: 3px;
+    font-weight: 700;
+}
+
+:root.dark .searchHighlight {
+    background: #854d0e;
+    color: #fef3c7;
 }
 
 .similarityBadge {

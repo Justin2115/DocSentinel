@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -329,4 +330,118 @@ def semantic_search(
             )
         )
 
+    try:
+        related = related_terms_in_texts(
+            term,
+            [f"{hit.document_name} {hit.snippet}" for hit in hits],
+        )
+        for hit, terms in zip(hits, related):
+            hit.highlight_terms = terms
+    except Exception:
+        logger.exception("Could not compute related highlight terms")
+
+    from app.services.search_service import make_snippet
+
+    for hit in hits:
+        hit.snippet = make_snippet(
+            hit.snippet,
+            term,
+            extra_terms=hit.highlight_terms,
+        )
+
     return SemanticSearchResponse(items=hits, total=len(hits), query=term)
+
+
+_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'-]+|[\u0900-\u097F]+|\d+")
+_STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "to", "for",
+    "of", "as", "by", "is", "are", "was", "were", "be", "been", "it", "its",
+    "this", "that", "these", "those", "with", "from", "into", "over", "after",
+    "before", "not", "no", "so", "than", "then", "too", "very", "can", "will",
+    "just", "about", "up", "out", "also", "only", "all", "any", "each", "few",
+    "more", "most", "other", "some", "such", "own", "same", "both", "year",
+    "years", "day", "days", "time", "one", "two", "new", "old", "first",
+    "last", "many", "much", "every", "within", "without", "using", "used",
+    "made", "make", "get", "got", "has", "have", "had", "does", "did", "done",
+}
+
+
+def _content_tokens(text: str) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for match in _TOKEN_RE.finditer(text or ""):
+        token = match.group(0)
+        key = token.lower()
+        if len(key) < 4 or key in _STOPWORDS or key in seen or key.isdigit():
+            continue
+        seen.add(key)
+        tokens.append(token)
+    return tokens
+
+
+def related_terms_in_texts(
+    query: str,
+    texts: list[str],
+    min_sim: float = 0.58,
+    max_terms: int = 2,
+) -> list[list[str]]:
+    """Return only high-confidence snippet words close in meaning to the query."""
+    if not query.strip() or not texts:
+        return [[] for _ in texts]
+
+    candidates_per_text: list[list[str]] = []
+    unique: list[str] = []
+    unique_keys: set[str] = set()
+    for text in texts:
+        items = _content_tokens(text)
+        candidates_per_text.append(items)
+        for item in items:
+            key = item.lower()
+            if key not in unique_keys and len(unique) < 250:
+                unique_keys.add(key)
+                unique.append(item)
+
+    if not unique:
+        return [[] for _ in texts]
+
+    try:
+        vectors = encode_texts([query.strip(), *unique])
+    except Exception:
+        logger.exception("Failed to embed terms for search highlighting")
+        return [[] for _ in texts]
+
+    query_vec = vectors[0]
+    scores: dict[str, float] = {}
+    for term, vector in zip(unique, vectors[1:]):
+        scores[term.lower()] = sum(a * b for a, b in zip(query_vec, vector))
+
+    result: list[list[str]] = []
+    for items in candidates_per_text:
+        ranked = sorted(
+            (
+                (item, scores[item.lower()])
+                for item in items
+                if item.lower() in scores
+            ),
+            key=lambda pair: pair[1],
+            reverse=True,
+        )
+        if not ranked or ranked[0][1] < min_sim:
+            result.append([])
+            continue
+
+        best = ranked[0][1]
+        picked: list[str] = []
+        seen: set[str] = set()
+        for item, score in ranked:
+            if score < min_sim or best - score > 0.04:
+                break
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            picked.append(item)
+            if len(picked) >= max_terms:
+                break
+        result.append(picked)
+    return result

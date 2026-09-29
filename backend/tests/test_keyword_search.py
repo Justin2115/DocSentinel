@@ -15,6 +15,27 @@ def test_make_snippet_centers_on_match():
     assert snippet.startswith("…") or "aaa" not in snippet
 
 
+def test_make_snippet_uses_match_lines_not_document_tail():
+    body = (
+        "Header notes.\n"
+        "Payment is overdue for this invoice totaling 1200 rupees.\n"
+        "Please settle promptly.\n"
+        + ("Closing remarks.\n" * 40)
+    )
+    snippet = make_snippet(body, "invoice")
+    assert "invoice totaling 1200" in snippet
+    assert "Closing remarks" not in snippet
+
+
+def test_make_snippet_centers_inside_a_long_line():
+    text = ("head " * 80) + "significant finding reported " + ("tail " * 80)
+    snippet = make_snippet(text, "significant")
+    assert "significant finding" in snippet
+    assert "head" in snippet
+    assert snippet.startswith("…")
+    assert not snippet.endswith("tail " * 10)
+
+
 def test_keyword_search_finds_filename_ocr_and_fields():
     db = SessionLocal()
     document = Document(

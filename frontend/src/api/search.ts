@@ -7,6 +7,7 @@ export interface SearchHit {
 	snippet: string;
 	match_field: string;
 	score: number | null;
+	highlight_terms?: string[];
 }
 
 export interface SemanticSearchHit {
@@ -17,6 +18,7 @@ export interface SemanticSearchHit {
 	snippet: string;
 	similarity: number;
 	match_type: string;
+	highlight_terms?: string[];
 }
 
 export interface SearchResponse {

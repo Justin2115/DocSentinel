@@ -56,6 +56,7 @@ def search_documents(
                 snippet=hit.snippet,
                 match_field="semantic",
                 score=hit.similarity,
+                highlight_terms=hit.highlight_terms,
             )
             for hit in semantic_result.items
         ]
