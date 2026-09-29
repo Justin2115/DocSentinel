@@ -8,11 +8,13 @@ import {
   LightMode,
   DarkMode,
   ChevronLeft,
+  AdminPanelSettings,
 } from "@mui/icons-material";
 import { NavLink } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { useAuth } from "../../context/AuthContext";
 
-const menuItems = [
+const baseMenuItems = [
   { name: "Dashboard", path: "/dashboard", icon: <Dashboard /> },
   { name: "Upload", path: "/upload", icon: <Upload /> },
   { name: "Library", path: "/library", icon: <Folder /> },
@@ -26,6 +28,7 @@ const menuItems = [
 ];
 
 export default function SideBar() {
+  const { isAdmin } = useAuth();
   const [darkMode, setDarkMode] = useState(
     () => localStorage.getItem("theme") === "dark"
   );
@@ -36,6 +39,13 @@ export default function SideBar() {
     document.documentElement.classList.toggle("dark", darkMode);
     localStorage.setItem("theme", darkMode ? "dark" : "light");
   }, [darkMode]);
+
+  const navigationItems = [
+    ...baseMenuItems,
+    ...(isAdmin
+      ? [{ name: "Admin Panel", path: "/admin", icon: <AdminPanelSettings /> }]
+      : []),
+  ];
 
   return (
     <aside className={collapsed ? "sidebar collapsed" : "sidebar"}>
@@ -48,7 +58,7 @@ export default function SideBar() {
         </div>
 
         <nav>
-          {menuItems.map((item) => (
+          {navigationItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}

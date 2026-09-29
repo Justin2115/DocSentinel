@@ -3,45 +3,18 @@ import SearchIcon from "@mui/icons-material/Search";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import LogoutIcon from "@mui/icons-material/Logout";
+import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 
 export default function TopBar() {
   const [open, setOpen] = useState(false);
-
-  const [profile, setProfile] = useState(() => {
-    const saved = localStorage.getItem("profile");
-
-    return saved
-      ? JSON.parse(saved)
-      : {
-          name: "Elvina Binoy",
-          email: "elvina@docsentinel.io",
-          phone: "",
-          role: "Admin",
-        };
-  });
-
+  const { user, isAdmin, logout: authLogout } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-
-  useEffect(() => {
-    const updateProfile = () => {
-      const saved = localStorage.getItem("profile");
-
-      if (saved) {
-        setProfile(JSON.parse(saved));
-      }
-    };
-
-    window.addEventListener("profileUpdated", updateProfile);
-
-    return () => {
-      window.removeEventListener("profileUpdated", updateProfile);
-    };
-  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -60,15 +33,22 @@ export default function TopBar() {
     };
   }, []);
 
-  const initials = profile.name
+  const displayName = user?.name || "User";
+  const displayRole = user?.role
+    ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
+    : "User";
+  const profilePicture = user?.profile_picture;
+
+  const initials = displayName
     .split(" ")
     .map((word: string) => word[0])
     .join("")
     .slice(0, 2)
     .toUpperCase();
 
-  const logout = () => {
-    localStorage.removeItem("auth");
+  const handleLogout = () => {
+    setOpen(false);
+    authLogout();
     navigate("/login");
   };
 
@@ -81,7 +61,6 @@ export default function TopBar() {
     }
 
     navigate(`/ask?q=${encodeURIComponent(trimmedQuery)}`);
-
     setSearchQuery("");
   };
 
@@ -98,10 +77,6 @@ export default function TopBar() {
             if (event.key === "Enter") {
               handleSearch();
             }
-          }}
-          onFocus={() => {
-            // If the user clicks the search box without typing,
-            // they can still press Enter to open Ask a Question.
           }}
           placeholder="Ask about any document..."
           aria-label="Ask about any document"
@@ -125,9 +100,22 @@ export default function TopBar() {
             className="profile"
             onClick={() => setOpen((prev) => !prev)}
           >
-            <div className="avatar">{initials}</div>
+            {profilePicture ? (
+              <img
+                src={profilePicture}
+                alt={displayName}
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: "50%",
+                  objectFit: "cover",
+                }}
+              />
+            ) : (
+              <div className="avatar">{initials}</div>
+            )}
 
-            <span>{profile.name.split(" ")[0]}</span>
+            <span>{displayName.split(" ")[0]}</span>
 
             <KeyboardArrowDownIcon
               className={open ? "arrowUp" : ""}
@@ -137,11 +125,24 @@ export default function TopBar() {
           {open && (
             <div className="profileDropdown">
               <div className="profileDropdownHeader">
-                <div className="dropdownAvatar">{initials}</div>
+                {profilePicture ? (
+                  <img
+                    src={profilePicture}
+                    alt={displayName}
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: "50%",
+                      objectFit: "cover",
+                    }}
+                  />
+                ) : (
+                  <div className="dropdownAvatar">{initials}</div>
+                )}
 
                 <div>
-                  <strong>{profile.name}</strong>
-                  <span>{profile.role}</span>
+                  <strong>{displayName}</strong>
+                  <span>{displayRole}</span>
                 </div>
               </div>
 
@@ -159,10 +160,24 @@ export default function TopBar() {
                 <span>Profile</span>
               </button>
 
+              {isAdmin && (
+                <button
+                  type="button"
+                  className="dropdownItem"
+                  onClick={() => {
+                    setOpen(false);
+                    navigate("/admin");
+                  }}
+                >
+                  <AdminPanelSettingsIcon />
+                  <span>Admin Panel</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 className="dropdownItem logoutItem"
-                onClick={logout}
+                onClick={handleLogout}
               >
                 <LogoutIcon />
                 <span>Log out</span>

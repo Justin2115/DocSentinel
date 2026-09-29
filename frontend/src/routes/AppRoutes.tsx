@@ -1,89 +1,129 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
+import Admin from "../pages/Admin";
 import AskQuestion from "../pages/AskQuestion";
+import AuthCallback from "../pages/AuthCallback";
 import Dashboard from "../pages/Dashboard";
 import Library from "../pages/Library";
 import Login from "../pages/Login";
 import NotFound from "../pages/NotFound";
+import Profile from "../pages/Profile";
 import ReviewQueue from "../pages/ReviewQueue";
 import Settings from "../pages/Settings";
 import Upload from "../pages/Upload";
 
 import PageLayout from "../components/layout/PageLayout";
+import { AdminRoute, ProtectedRoute } from "./RouteGuards";
+import { useAuth } from "../context/AuthContext";
+
+const RootRedirect = () => {
+	const { isAuthenticated, isLoading } = useAuth();
+	if (isLoading) {
+		return null;
+	}
+	return <Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />;
+};
 
 const AppRoutes = () => {
-  return (
-    <Routes>
-      <Route
-        path="/"
-        element={<Navigate to="/login" replace />}
-      />
+	return (
+		<Routes>
+			<Route path="/" element={<RootRedirect />} />
+			<Route path="/login" element={<Login />} />
+			<Route path="/auth/callback" element={<AuthCallback />} />
 
-      <Route
-        path="/login"
-        element={<Login />}
-      />
+			{/* Protected User Routes */}
+			<Route
+				path="/dashboard"
+				element={
+					<ProtectedRoute>
+						<PageLayout>
+							<Dashboard />
+						</PageLayout>
+					</ProtectedRoute>
+				}
+			/>
 
-      <Route
-        path="/dashboard"
-        element={
-          <PageLayout>
-            <Dashboard />
-          </PageLayout>
-        }
-      />
+			<Route
+				path="/upload"
+				element={
+					<ProtectedRoute>
+						<PageLayout>
+							<Upload />
+						</PageLayout>
+					</ProtectedRoute>
+				}
+			/>
 
-      <Route
-        path="/upload"
-        element={
-          <PageLayout>
-            <Upload />
-          </PageLayout>
-        }
-      />
+			<Route
+				path="/library"
+				element={
+					<ProtectedRoute>
+						<PageLayout>
+							<Library />
+						</PageLayout>
+					</ProtectedRoute>
+				}
+			/>
 
-      <Route
-        path="/library"
-        element={
-          <PageLayout>
-            <Library />
-          </PageLayout>
-        }
-      />
+			<Route
+				path="/ask"
+				element={
+					<ProtectedRoute>
+						<PageLayout>
+							<AskQuestion />
+						</PageLayout>
+					</ProtectedRoute>
+				}
+			/>
 
-      <Route
-        path="/ask"
-        element={
-          <PageLayout>
-            <AskQuestion />
-          </PageLayout>
-        }
-      />
+			<Route
+				path="/review"
+				element={
+					<ProtectedRoute>
+						<PageLayout>
+							<ReviewQueue />
+						</PageLayout>
+					</ProtectedRoute>
+				}
+			/>
 
-      <Route
-        path="/review"
-        element={
-          <PageLayout>
-            <ReviewQueue />
-          </PageLayout>
-        }
-      />
+			<Route
+				path="/settings"
+				element={
+					<ProtectedRoute>
+						<PageLayout>
+							<Settings />
+						</PageLayout>
+					</ProtectedRoute>
+				}
+			/>
 
-      <Route
-        path="/settings"
-        element={
-          <PageLayout>
-            <Settings />
-          </PageLayout>
-        }
-      />
+			<Route
+				path="/profile"
+				element={
+					<ProtectedRoute>
+						<PageLayout>
+							<Profile />
+						</PageLayout>
+					</ProtectedRoute>
+				}
+			/>
 
-      <Route
-        path="*"
-        element={<NotFound />}
-      />
-    </Routes>
-  );
+			{/* Admin Only Route */}
+			<Route
+				path="/admin"
+				element={
+					<AdminRoute>
+						<PageLayout>
+							<Admin />
+						</PageLayout>
+					</AdminRoute>
+				}
+			/>
+
+			<Route path="*" element={<NotFound />} />
+		</Routes>
+	);
 };
 
 export default AppRoutes;

@@ -5,6 +5,7 @@ from app.models.document import (
     OCRResult,
     ReviewQueue,
 )
+from app.models.user import User
 
 __all__ = [
     "Document",
@@ -12,4 +13,5 @@ __all__ = [
     "OCRResult",
     "ExtractedField",
     "ReviewQueue",
+    "User",
 ]
