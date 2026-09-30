@@ -22,35 +22,35 @@ interface SelectedFile {
   file: File;
 }
 
-type OCRLanguage = "auto" | "en" | "hi" | "mr" | "en+hi" | "en+mr";
+export type DepartmentType = "auto" | "HR" | "FINANCE" | "LEGAL" | "OPERATIONS" | "IT";
 
-const OCR_LANGUAGES: {
-  value: OCRLanguage;
+const DEPARTMENTS: {
+  value: DepartmentType;
   label: string;
 }[] = [
   {
     value: "auto",
-    label: "Auto Detect",
+    label: "Auto Detect (AI Classification)",
   },
   {
-    value: "en",
-    label: "English",
+    value: "HR",
+    label: "Human Resources (HR)",
   },
   {
-    value: "hi",
-    label: "Hindi",
+    value: "FINANCE",
+    label: "Finance & Accounting",
   },
   {
-    value: "mr",
-    label: "Marathi",
+    value: "LEGAL",
+    label: "Legal & Compliance",
   },
   {
-    value: "en+hi",
-    label: "English + Hindi",
+    value: "OPERATIONS",
+    label: "Operations",
   },
   {
-    value: "en+mr",
-    label: "English + Marathi",
+    value: "IT",
+    label: "Information Technology (IT)",
   },
 ];
 
@@ -73,9 +73,9 @@ export default function Upload() {
   const [uploadError, setUploadError] =
     useState("");
 
-  // OCR language selector
-  const [selectedLanguage, setSelectedLanguage] =
-    useState<OCRLanguage>("auto");
+  // Target department selection (optional, default auto-detection)
+  const [selectedDepartment, setSelectedDepartment] =
+    useState<DepartmentType>("auto");
 
   const docxContainerRef =
     useRef<HTMLDivElement | null>(null);
@@ -203,7 +203,7 @@ export default function Upload() {
     try {
       const response = await uploadDocumentRequest(
         selectedFile.file,
-        selectedLanguage
+        selectedDepartment !== "auto" ? selectedDepartment : undefined
       );
 
       setUploadedDocument(response.data);
@@ -294,44 +294,44 @@ export default function Upload() {
           Maximum file size: 25 MB
         </span>
 
-        {/* ================= OCR LANGUAGE ================= */}
+        {/* ================= DEPARTMENT CATEGORIZATION ================= */}
 
         <div
-          className="ocrLanguageSelector"
+          className="departmentSelector ocrLanguageSelector"
           onClick={(event) =>
             event.stopPropagation()
           }
         >
           <label
-            htmlFor="ocr-language"
+            htmlFor="doc-department"
             className="ocrLanguageLabel"
           >
-            OCR Language
+            Target Department (Optional)
           </label>
 
           <select
-            id="ocr-language"
+            id="doc-department"
             className="ocrLanguageSelect"
-            value={selectedLanguage}
+            value={selectedDepartment}
             onChange={(event) =>
-              setSelectedLanguage(
-                event.target.value as OCRLanguage
+              setSelectedDepartment(
+                event.target.value as DepartmentType
               )
             }
             disabled={isUploading}
           >
-            {OCR_LANGUAGES.map((language) => (
+            {DEPARTMENTS.map((dept) => (
               <option
-                key={language.value}
-                value={language.value}
+                key={dept.value}
+                value={dept.value}
               >
-                {language.label}
+                {dept.label}
               </option>
             ))}
           </select>
 
           <span className="ocrLanguageHint">
-            Choose the document language for OCR.
+            Select a target department or let AI classify automatically. Language is detected automatically.
           </span>
         </div>
       </div>
@@ -455,8 +455,13 @@ export default function Upload() {
             </strong>
 
             <span>
-              Document ID:{" "}
-              {uploadedDocument.id}
+              Document ID: {uploadedDocument.id}
+              {uploadedDocument.department
+                ? ` · Department: ${uploadedDocument.department}`
+                : ""}
+              {uploadedDocument.document_type
+                ? ` · Type: ${uploadedDocument.document_type}`
+                : ""}
               {uploadedDocument.status
                 ? ` · Status: ${uploadedDocument.status}`
                 : ""}

@@ -4,12 +4,14 @@ export interface User {
 	id: number;
 	email: string;
 	name: string;
-	role: "admin" | "user" | string;
+	role: "ADMIN" | "UPLOAD_MAKER" | "UPLOAD_CHECKER" | "admin" | "user" | string;
+	department?: string | null;
 	profile_picture?: string | null;
 	is_active: boolean;
 	created_at?: string;
 	last_login?: string | null;
 }
+
 
 export interface TokenResponse {
 	access_token: string;
@@ -73,3 +75,33 @@ export async function getAdminUsers(): Promise<User[]> {
 	const response = await apiClient.get<User[]>("/auth/admin/users");
 	return response.data;
 }
+
+export interface UserUpdatePayload {
+	role?: string;
+	department?: string | null;
+	is_active?: boolean;
+	name?: string;
+}
+
+/**
+ * Admin only: Update user role, department, or active status
+ */
+export async function updateAdminUser(
+	userId: number,
+	payload: UserUpdatePayload
+): Promise<User> {
+	const response = await apiClient.patch<User>(`/auth/admin/users/${userId}`, payload);
+	return response.data;
+}
+
+/**
+ * Admin only: Update user role specifically
+ */
+export async function updateUserRole(
+	userId: number,
+	role: string
+): Promise<User> {
+	const response = await apiClient.patch<User>(`/auth/admin/users/${userId}/role`, { role });
+	return response.data;
+}
+

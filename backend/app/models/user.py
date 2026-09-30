@@ -40,9 +40,13 @@ class User(Base):
     )
     role: Mapped[str] = mapped_column(
         String(50),
-        default="user",
-        server_default="user",
+        default="UPLOAD_MAKER",
+        server_default="UPLOAD_MAKER",
         nullable=False,
+    )
+    department: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
@@ -59,3 +63,15 @@ class User(Base):
         DateTime,
         nullable=True,
     )
+
+    @property
+    def is_admin(self) -> bool:
+        return (self.role or "").strip().upper() == "ADMIN"
+
+    @property
+    def is_maker(self) -> bool:
+        return (self.role or "").strip().upper() in ("UPLOAD_MAKER", "MAKER", "USER", "ADMIN")
+
+    @property
+    def is_checker(self) -> bool:
+        return (self.role or "").strip().upper() in ("UPLOAD_CHECKER", "CHECKER", "ADMIN")

@@ -18,10 +18,13 @@ from app.schemas.auth import (
     TokenResponse,
     UserResponse,
 )
+from app.core.rbac import Department, UserRole
+from app.schemas.user import UserUpdateRequest
 from app.services.auth_service import (
     authenticate_user_credentials,
     upsert_google_user,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -272,3 +275,122 @@ async def list_users_admin(
     """List all registered users. Restricted to admin role."""
     users = db.query(User).order_by(User.id.asc()).all()
     return [UserResponse.model_validate(u) for u in users]
+
+
+@router.patch(
+
+    "/admin/users/{user_id}",
+    response_model=UserResponse,
+    summary="Admin only: Update a user's role, department, or active status",
+)
+async def update_user_admin(
+    user_id: int,
+    payload: UserUpdateRequest,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    target_user = db.query(User).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User with ID {user_id} not found",
+        )
+
+    # Prevent admin from changing their own role (prevent lockout)
+    if payload.role is not None and current_user.id == target_user.id:
+        normalized_requested = UserRole.normalize(payload.role)
+        if normalized_requested != UserRole.ADMIN.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Administrators cannot demote their own account role",
+            )
+
+    if payload.role is not None:
+        valid_roles = [r.value for r in UserRole]
+        normalized_role = UserRole.normalize(payload.role)
+        if normalized_role not in valid_roles:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid role '{payload.role}'. Must be one of: {', '.join(valid_roles)}",
+            )
+        target_user.role = normalized_role
+
+    if payload.department is not None:
+        if payload.department.strip() == "":
+            target_user.department = None
+        else:
+            normalized_dept = Department.normalize(payload.department)
+            valid_depts = [d.value for d in Department]
+            if normalized_dept not in valid_depts:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid department '{payload.department}'. Must be one of: {', '.join(valid_depts)}",
+                )
+            target_user.department = normalized_dept
+
+    if payload.is_active is not None:
+        target_user.is_active = payload.is_active
+
+    if payload.name is not None and payload.name.strip():
+        target_user.name = payload.name.strip()
+
+    db.commit()
+    db.refresh(target_user)
+    return UserResponse.model_validate(target_user)
+
+
+@router.patch(
+    "/admin/users/{user_id}/role",
+    response_model=UserResponse,
+    summary="Admin only: Update a user's role",
+)
+async def update_user_role_admin(
+    user_id: int,
+    payload: dict,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    role_val = payload.get("role")
+    if not role_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role field is required",
+        )
+    return await update_user_admin(
+        user_id=user_id,
+        payload=UserUpdateRequest(role=role_val),
+        current_user=current_user,
+        db=db,
+    )
+
+
+# Dedicated admin router mounted at /api/admin
+admin_router = APIRouter(
+    prefix="/api/admin",
+    tags=["Admin Management"],
+)
+
+admin_router.add_api_route(
+    "/users",
+    list_users_admin,
+    methods=["GET"],
+    response_model=list[UserResponse],
+    summary="Admin only: List all users in the system",
+)
+
+admin_router.add_api_route(
+    "/users/{user_id}",
+    update_user_admin,
+    methods=["PATCH"],
+    response_model=UserResponse,
+    summary="Admin only: Update a user's role or department",
+)
+
+admin_router.add_api_route(
+    "/users/{user_id}/role",
+    update_user_role_admin,
+    methods=["PATCH"],
+    response_model=UserResponse,
+    summary="Admin only: Update a user's role",
+)
+

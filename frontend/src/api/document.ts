@@ -8,11 +8,17 @@ export interface DocumentRecord {
 	file_type: string;
 	file_size: number | null;
 	document_type: string | null;
+	department?: string | null;
 	status: string | null;
 	uploaded_by?: number | null;
+	assigned_checker?: number | null;
 	overall_confidence: number | null;
 	uploaded_at: string | null;
+	created_at?: string | null;
+	updated_at?: string | null;
 	processed_at: string | null;
+	uploader_name?: string | null;
+	checker_name?: string | null;
 }
 
 export interface DocumentPage {
@@ -86,6 +92,7 @@ export interface DocumentQuery {
 	skip?: number;
 	limit?: number;
 	search?: string;
+	department?: string;
 	document_type?: string;
 	file_type?: string;
 	status?: string;
@@ -124,22 +131,50 @@ export const getDashboardStats = () =>
 
 export const uploadDocument = (
 	file: File,
-	language: string
+	department?: string,
+	documentType?: string
 ) => {
 	const formData = new FormData();
+	formData.append("file", file);
+	formData.append("language", "auto");
 
-	formData.append(
-		"file",
-		file
-	);
-
-	formData.append(
-		"language",
-		language
-	);
+	if (department && department !== "auto") {
+		formData.append("department", department);
+	}
+	if (documentType) {
+		formData.append("document_type", documentType);
+	}
 
 	return apiClient.post<DocumentRecord>(
 		"/documents/upload",
 		formData
 	);
 };
+
+export const getReviewQueueDocuments = () =>
+	apiClient.get<DocumentDetail[]>(
+		"/documents/review/queue"
+	);
+
+export const approveDocument = (id: number) =>
+	apiClient.post<DocumentRecord>(
+		`/documents/${id}/approve`
+	);
+
+export const rejectDocument = (id: number, reason?: string) =>
+	apiClient.post<DocumentRecord>(
+		`/documents/${id}/reject`,
+		{ reason }
+	);
+
+export const requestDocumentRevision = (id: number, notes?: string) =>
+	apiClient.post<DocumentRecord>(
+		`/documents/${id}/request-revision`,
+		{ notes }
+	);
+
+export const assignDocumentChecker = (id: number, checkerId: number) =>
+	apiClient.post<DocumentRecord>(
+		`/documents/${id}/assign`,
+		{ checker_id: checkerId }
+	);

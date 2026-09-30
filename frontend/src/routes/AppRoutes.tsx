@@ -13,8 +13,9 @@ import Settings from "../pages/Settings";
 import Upload from "../pages/Upload";
 
 import PageLayout from "../components/layout/PageLayout";
-import { AdminRoute, ProtectedRoute } from "./RouteGuards";
+import { AdminRoute, CheckerRoute, MakerRoute, ProtectedRoute } from "./RouteGuards";
 import { useAuth } from "../context/AuthContext";
+
 
 const RootRedirect = () => {
 	const { isAuthenticated, isLoading } = useAuth();
@@ -46,11 +47,11 @@ const AppRoutes = () => {
 			<Route
 				path="/upload"
 				element={
-					<ProtectedRoute>
+					<MakerRoute>
 						<PageLayout>
 							<Upload />
 						</PageLayout>
-					</ProtectedRoute>
+					</MakerRoute>
 				}
 			/>
 
@@ -79,13 +80,14 @@ const AppRoutes = () => {
 			<Route
 				path="/review"
 				element={
-					<ProtectedRoute>
+					<CheckerRoute>
 						<PageLayout>
 							<ReviewQueue />
 						</PageLayout>
-					</ProtectedRoute>
+					</CheckerRoute>
 				}
 			/>
+
 
 			<Route
 				path="/settings"

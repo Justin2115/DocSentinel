@@ -22,21 +22,47 @@ class ExtractedFieldData:
 @dataclass
 class DocumentExtractionReport:
     document_type: str
+    department: str | None = None
     fields: list[ExtractedFieldData] = field(default_factory=list)
     overall_confidence: float = 0.0
     requires_review: bool = False
     review_reason: str | None = None
 
 
-# Classification keywords
-DOCUMENT_TYPE_RULES: list[tuple[str, list[str]]] = [
-    ("Invoice", ["invoice", "bill to", "tax invoice", "subtotal", "amount due", "invoice number", "inv#", "gstin"]),
-    ("Receipt", ["receipt", "cash receipt", "payment receipt", "amount paid", "balance paid", "transaction id"]),
-    ("Application Form", ["application form", "applicant name", "reference #", "employment application", "candidate", "personal details", "educational details"]),
-    ("Medical Claim", ["medical claim", "diagnosis", "health insurance", "hospital", "patient", "claim form", "doctor"]),
-    ("Contract", ["agreement", "terms and conditions", "parties", "non-disclosure", "confidentiality", "contract", "witnesseth", "hereby agree"]),
-    ("ID Document", ["identity card", "passport", "driver license", "driving licence", "aadhaar", "ssn", "date of birth", "dob", "nationality", "id number"]),
+# Classification keywords mapping: (document_type, department, keywords)
+DOCUMENT_TYPE_RULES: list[tuple[str, str, list[str]]] = [
+    # Finance
+    ("Invoices", "Finance", ["invoice", "tax invoice", "bill to", "subtotal", "amount due", "invoice number", "inv#", "gstin"]),
+    ("Invoice", "Finance", ["invoice", "tax invoice", "bill to", "subtotal", "amount due", "invoice number", "inv#", "gstin"]),
+    ("Budget Reports", "Finance", ["budget report", "budget allocation", "financial forecast", "expenditure report", "fiscal year", "budget variance", "financial plan"]),
+    ("Tax Documents", "Finance", ["tax document", "form 16", "w-2", "1099", "tax return", "income tax", "tds certificate", "tax assessment", "pan card"]),
+    ("Receipt", "Finance", ["receipt", "cash receipt", "payment receipt", "amount paid", "balance paid", "transaction id"]),
+
+    # HR
+    ("Employee Records", "HR", ["employee record", "employment details", "employee details", "employee name", "staff record", "curriculum vitae", "resume", "joining date", "personal details", "educational details"]),
+    ("Application Form", "HR", ["application form", "applicant name", "reference #", "employment application", "candidate", "personal details", "educational details"]),
+    ("Policies", "HR", ["policy", "guidelines", "code of conduct", "regulations", "terms of employment", "leave policy", "workplace policy", "hr policy"]),
+    ("Appraisals", "HR", ["appraisal", "performance review", "annual appraisal", "kpi", "competency evaluation", "key performance", "performance evaluation"]),
+
+    # Legal
+    ("Contracts", "Legal", ["contract", "parties", "non-disclosure", "confidentiality agreement", "witnesseth", "hereby agree", "terms and conditions"]),
+    ("Contract", "Legal", ["contract", "parties", "non-disclosure", "confidentiality agreement", "witnesseth", "hereby agree", "terms and conditions"]),
+    ("Agreements", "Legal", ["agreement", "memorandum of understanding", "mou", "service agreement", "lease agreement", "partnership agreement"]),
+    ("Compliance Documents", "Legal", ["compliance document", "audit report", "regulatory compliance", "iso certification", "gdpr", "statutory compliance", "compliance"]),
+
+    # Operations
+    ("SOPs", "Operations", ["standard operating procedure", "sop", "procedure manual", "operating procedure", "workflow guide", "standard procedure"]),
+    ("Operational Reports", "Operations", ["operational report", "daily operations", "incident report", "production log", "efficiency report", "shift handover", "logistics report"]),
+
+    # IT
+    ("Technical Documentation", "IT", ["technical documentation", "api documentation", "architecture diagram", "system specification", "deployment guide", "database schema", "user manual"]),
+    ("Change Requests", "IT", ["change request", "rfc", "cr-", "system change", "configuration change", "infrastructure change", "maintenance window"]),
+
+    # Other / Medical / ID (fallback mappings)
+    ("Medical Claim", "Operations", ["medical claim", "diagnosis", "health insurance", "hospital", "patient", "claim form", "doctor"]),
+    ("ID Document", "HR", ["identity card", "passport", "driver license", "driving licence", "aadhaar", "ssn", "date of birth", "dob", "nationality", "id number"]),
 ]
+
 
 # Field extraction regex patterns & confidence weights
 # Formats: (field_name, regex_pattern, base_confidence)
@@ -124,30 +150,40 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
 ]
 
 
+def classify_document_category(text: str) -> tuple[str, str, float]:
+    """
+    Classify both document type and department based on keyword frequency.
+    Returns (department, document_type, confidence).
+    """
+    if not text:
+        return "Operations", "General Document", 50.0
+
+    lower_text = text.lower()
+    scores: dict[tuple[str, str], int] = {}
+
+    for doc_type, dept, keywords in DOCUMENT_TYPE_RULES:
+        count = sum(1 for kw in keywords if kw in lower_text)
+        if count > 0:
+            scores[(doc_type, dept)] = count
+
+    if not scores:
+        return "Operations", "General Document", 60.0
+
+    best_match = max(scores, key=scores.get)
+    max_score = scores[best_match]
+    confidence = min(95.0, 65.0 + (max_score * 7.5))
+
+    return best_match[1], best_match[0], round(confidence, 2)
+
+
 def classify_document_type(text: str) -> tuple[str, float]:
     """
     Classify the document type based on keyword frequency and relevance.
     Returns (document_type, confidence).
     """
-    if not text:
-        return "General Document", 50.0
+    _, doc_type, conf = classify_document_category(text)
+    return doc_type, conf
 
-    lower_text = text.lower()
-    scores: dict[str, int] = {}
-
-    for doc_type, keywords in DOCUMENT_TYPE_RULES:
-        count = sum(1 for kw in keywords if kw in lower_text)
-        if count > 0:
-            scores[doc_type] = count
-
-    if not scores:
-        return "General Document", 60.0
-
-    best_type = max(scores, key=scores.get)
-    max_score = scores[best_type]
-    confidence = min(95.0, 65.0 + (max_score * 7.5))
-
-    return best_type, round(confidence, 2)
 
 
 def extract_fields_from_text(
@@ -221,10 +257,11 @@ def extract_document_report(
     4. Evaluates if the document needs human review in the review queue.
     """
     combined_text = ocr_result.combined_text
-    doc_type, type_confidence = classify_document_type(combined_text)
+    department, doc_type, type_confidence = classify_document_category(combined_text)
 
     all_fields: list[ExtractedFieldData] = []
     seen_field_keys: set[str] = set()
+
 
     # Extract fields from each page
     for page in ocr_result.pages:
@@ -283,8 +320,10 @@ def extract_document_report(
 
     return DocumentExtractionReport(
         document_type=doc_type,
+        department=department,
         fields=all_fields,
         overall_confidence=overall_conf,
         requires_review=requires_review,
         review_reason=final_reason,
     )
+

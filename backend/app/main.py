@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 
 logging.basicConfig(level=logging.INFO)
 
-from app.api.auth import router as auth_router
+from app.api.auth import admin_router, router as auth_router
 from app.api.documents import router as documents_router
 from app.api.search import router as search_router
+
 from app.core.config import settings
 from app.db.base import Base
 import app.models.document
@@ -42,8 +43,10 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(documents_router)
 app.include_router(search_router)
+
 
 
 @app.on_event("startup")
@@ -54,6 +57,25 @@ def initialize_database() -> None:
 
     engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
     Base.metadata.create_all(engine)
+
+    # Ensure schema has all RBAC & categorization columns without dropping existing data
+    try:
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture VARCHAR(1024);
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255);
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'UPLOAD_MAKER';
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(50);
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;
+                ALTER TABLE documents ADD COLUMN IF NOT EXISTS department VARCHAR(50);
+                ALTER TABLE documents ADD COLUMN IF NOT EXISTS assigned_checker INTEGER REFERENCES users(id) ON DELETE SET NULL;
+                ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+            """))
+    except Exception as e:
+        logging.warning("Schema compatibility check notice: %s", e)
+
 
     # Initialize default admin account if not already present
     with Session(engine) as session:

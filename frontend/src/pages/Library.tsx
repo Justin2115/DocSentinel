@@ -80,13 +80,14 @@ const Library = () => {
 	const [searchMode, setSearchMode] = useState<SearchMode>("keyword");
 	const [typeFilter, setTypeFilter] = useState("All types");
 	const [statusFilter, setStatusFilter] = useState("All status");
+	const [departmentFilter, setDepartmentFilter] = useState("All departments");
 	const [selectedDocument, setSelectedDocument] =
 		useState<DocumentDetail | null>(null);
 	const [documents, setDocuments] = useState<DocumentItem[]>([]);
 	const [hits, setHits] = useState<SearchResultHit[]>([]);
 	const [total, setTotal] = useState(0);
 	const [page, setPage] = useState(1);
-	const listKey = `${debouncedSearch}|${searchMode}|${typeFilter}|${statusFilter}`;
+	const listKey = `${debouncedSearch}|${searchMode}|${typeFilter}|${statusFilter}|${departmentFilter}`;
 	const [listKeySeen, setListKeySeen] = useState(listKey);
 	if (listKey !== listKeySeen) {
 		setListKeySeen(listKey);
@@ -210,9 +211,13 @@ const Library = () => {
 							? "indexed"
 							: undefined;
 
+		const department =
+			departmentFilter === "All departments" ? undefined : departmentFilter;
+
 		getDocuments(
 			{
 				status,
+				department,
 				skip: (page - 1) * pageSize,
 				limit: pageSize,
 			},
@@ -251,6 +256,7 @@ const Library = () => {
 		debouncedSearch,
 		typeFilter,
 		statusFilter,
+		departmentFilter,
 		page,
 		searchMode,
 		showingSearch,
@@ -400,6 +406,21 @@ const Library = () => {
 					<div className="filterSelect">
 						<FilterListIcon />
 						<select
+							value={departmentFilter}
+							onChange={(event) => setDepartmentFilter(event.target.value)}
+							disabled={showingSearch}
+						>
+							<option>All departments</option>
+							<option value="HR">HR</option>
+							<option value="FINANCE">Finance</option>
+							<option value="LEGAL">Legal</option>
+							<option value="OPERATIONS">Operations</option>
+							<option value="IT">IT</option>
+						</select>
+						<KeyboardArrowDownIcon />
+					</div>
+					<div className="filterSelect">
+						<select
 							value={typeFilter}
 							onChange={(event) => setTypeFilter(event.target.value)}
 							disabled={showingSearch}
@@ -454,6 +475,7 @@ const Library = () => {
 							<thead>
 								<tr>
 									<th>NAME</th>
+									<th>DEPARTMENT</th>
 									<th>TYPE</th>
 									<th>DATE</th>
 									<th>STATUS</th>
@@ -464,11 +486,11 @@ const Library = () => {
 							<tbody>
 								{loading ? (
 									<tr>
-										<td colSpan={6}>Loading documents...</td>
+										<td colSpan={7}>Loading documents...</td>
 									</tr>
 								) : error ? (
 									<tr>
-										<td colSpan={6}>{error}</td>
+										<td colSpan={7}>{error}</td>
 									</tr>
 								) : documents.length > 0 ? (
 									documents.map((document) => (
@@ -483,6 +505,24 @@ const Library = () => {
 														<span>{formatSize(document.file_size)}</span>
 													</div>
 												</div>
+											</td>
+											<td>
+												<span
+													style={{
+														padding: "4px 8px",
+														borderRadius: "6px",
+														fontSize: "11px",
+														fontWeight: 600,
+														background: document.department
+															? "rgba(245, 158, 11, 0.12)"
+															: "rgba(255, 255, 255, 0.05)",
+														color: document.department
+															? "#fbbf24"
+															: "var(--text-secondary, #94a3b8)",
+													}}
+												>
+													{document.department || "--"}
+												</span>
 											</td>
 											<td>
 												<span className="fileType">
@@ -531,7 +571,7 @@ const Library = () => {
 									))
 								) : (
 									<tr>
-										<td colSpan={6}>
+										<td colSpan={7}>
 											<div className="emptyLibrary">
 												<SearchIcon />
 												<h3>No documents found</h3>
@@ -611,6 +651,14 @@ const Library = () => {
 										{formatSize(selectedDocument.file_size)}
 									</p>
 									<div className="previewDetails">
+										<div>
+											<strong>Department</strong>
+											<span>{selectedDocument.department || "Unassigned"}</span>
+										</div>
+										<div>
+											<strong>Document Type</strong>
+											<span>{selectedDocument.document_type || "--"}</span>
+										</div>
 										<div>
 											<strong>Status</strong>
 											<span>{displayStatus(selectedDocument.status)}</span>

@@ -54,14 +54,27 @@ class Document(Base):
         nullable=True,
     )
 
+    department: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+        index=True,
+    )
+
     status: Mapped[str | None] = mapped_column(
         String(50),
-        default="uploaded",
+        default="UPLOADED",
         nullable=True,
     )
 
     uploaded_by: Mapped[int | None] = mapped_column(
         Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    assigned_checker: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
@@ -76,12 +89,34 @@ class Document(Base):
         server_default=func.now(),
     )
 
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        onupdate=func.now(),
+    )
+
     processed_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,
     )
 
+    @property
+    def created_at(self) -> datetime | None:
+        return self.uploaded_at
+
     # Relationships
+    uploader: Mapped["User | None"] = relationship(
+        "User",
+        foreign_keys=[uploaded_by],
+        primaryjoin="Document.uploaded_by == User.id",
+    )
+
+    checker: Mapped["User | None"] = relationship(
+        "User",
+        foreign_keys=[assigned_checker],
+        primaryjoin="Document.assigned_checker == User.id",
+    )
+
     pages: Mapped[list["DocumentPage"]] = relationship(
         "DocumentPage",
         back_populates="document",
@@ -347,3 +382,5 @@ class ReviewQueue(Base):
 
 
 from app.models.embedding import EmbeddingIndex  # noqa: E402,F401
+from app.models.user import User  # noqa: E402,F401
+

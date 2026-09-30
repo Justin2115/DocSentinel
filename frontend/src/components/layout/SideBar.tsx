@@ -14,21 +14,8 @@ import { NavLink } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 
-const baseMenuItems = [
-  { name: "Dashboard", path: "/dashboard", icon: <Dashboard /> },
-  { name: "Upload", path: "/upload", icon: <Upload /> },
-  { name: "Library", path: "/library", icon: <Folder /> },
-  { name: "Ask a question", path: "/ask", icon: <Chat /> },
-  {
-    name: "Review queue",
-    path: "/review",
-    icon: <AssignmentTurnedIn />,
-  },
-  { name: "Settings", path: "/settings", icon: <Settings /> },
-];
-
 export default function SideBar() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canUpload, canReview } = useAuth();
   const [darkMode, setDarkMode] = useState(
     () => localStorage.getItem("theme") === "dark"
   );
@@ -41,7 +28,16 @@ export default function SideBar() {
   }, [darkMode]);
 
   const navigationItems = [
-    ...baseMenuItems,
+    { name: "Dashboard", path: "/dashboard", icon: <Dashboard /> },
+    ...(canUpload
+      ? [{ name: "Upload", path: "/upload", icon: <Upload /> }]
+      : []),
+    { name: "Library", path: "/library", icon: <Folder /> },
+    { name: "Ask a question", path: "/ask", icon: <Chat /> },
+    ...(canReview
+      ? [{ name: "Review queue", path: "/review", icon: <AssignmentTurnedIn /> }]
+      : []),
+    { name: "Settings", path: "/settings", icon: <Settings /> },
     ...(isAdmin
       ? [{ name: "Admin Panel", path: "/admin", icon: <AdminPanelSettings /> }]
       : []),

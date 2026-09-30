@@ -16,10 +16,12 @@ class UserResponse(BaseModel):
     email: str
     name: str
     role: str
+    department: Optional[str] = None
     profile_picture: Optional[str] = None
     is_active: bool = True
     created_at: Optional[datetime] = None
     last_login: Optional[datetime] = None
+
 
 
 class TokenResponse(BaseModel):

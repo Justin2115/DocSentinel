@@ -14,6 +14,15 @@ from fastapi import (
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.dependencies import (
+    get_current_user,
+    require_admin,
+    require_upload_checker,
+    require_upload_maker,
+    verify_document_review_access,
+    verify_document_view_access,
+)
+from app.core.rbac import Department, DocumentStatus, UserRole
 from app.db.session import get_db
 from app.models.document import (
     Document,
@@ -22,11 +31,14 @@ from app.models.document import (
     OCRResult,
     ReviewQueue,
 )
+from app.models.user import User
 from app.schemas.document import (
+    AssignCheckerRequest,
     DashboardStatsResponse,
     DocumentDetailResponse,
     DocumentListResponse,
     DocumentResponse,
+    ReviewActionRequest,
 )
 from app.services.embedding_service import (
     delete_document_embeddings,
@@ -38,6 +50,7 @@ from app.services.search_service import semantic_matching_document_ids
 from app.services.upload_service import UPLOAD_DIR, save_uploaded_file
 
 logger = logging.getLogger(__name__)
+
 
 router = APIRouter(
     prefix="/api/documents",
@@ -56,14 +69,19 @@ router = APIRouter(
 )
 async def upload_document(
     file: UploadFile = File(...),
-    language: str = Form("en"),
+    language: str = Form("auto"),
+    department: str | None = Form(None),
+    document_type: str | None = Form(None),
+    current_user: User = Depends(require_upload_maker),
     db: Session = Depends(get_db),
 ):
     """
     Upload and process a document through the document processing pipeline.
+    Language is detected automatically unless explicitly provided.
+    Requires UPLOAD_MAKER or ADMIN role.
     """
 
-    norm_lang = (language or "en").lower().strip()
+    norm_lang = (language or "auto").lower().strip()
 
     if norm_lang not in SUPPORTED_LANGUAGES:
         raise HTTPException(
@@ -96,12 +114,14 @@ async def upload_document(
             file_path=file_path,
             file_type=content_type,
             file_size=file_size,
-            status="processing",
+            uploaded_by=current_user.id if current_user else None,
+            status=DocumentStatus.UPLOADED.value,
         )
 
         db.add(document)
         db.commit()
         db.refresh(document)
+
 
         try:
             # ------------------------------------------------
@@ -206,29 +226,29 @@ async def upload_document(
                 db.add(field_row)
 
             # ------------------------------------------------
-            # Review queue
+            # Department Categorization & Review Queue
             # ------------------------------------------------
 
-            final_status = "completed"
+            raw_dept = department or report.department or (current_user.department if current_user else None) or "Operations"
+            resolved_dept = Department.normalize(raw_dept) or raw_dept
+            resolved_doc_type = document_type or report.document_type or "General Document"
 
-            if report.requires_review:
+            final_status = DocumentStatus.PENDING_REVIEW.value
 
-                final_status = "needs_review"
-
-                review_item = ReviewQueue(
-                    document_id=document.id,
-                    reason=report.review_reason,
-                    confidence=report.overall_confidence,
-                    status="pending",
-                )
-
-                db.add(review_item)
+            review_item = ReviewQueue(
+                document_id=document.id,
+                reason=report.review_reason or "Pending verification",
+                confidence=report.overall_confidence,
+                status="pending",
+            )
+            db.add(review_item)
 
             # ------------------------------------------------
             # Update document
             # ------------------------------------------------
 
-            document.document_type = report.document_type
+            document.department = resolved_dept
+            document.document_type = resolved_doc_type
             document.overall_confidence = report.overall_confidence
             document.status = final_status
             document.processed_at = func.now()
@@ -236,6 +256,7 @@ async def upload_document(
             db.commit()
             db.refresh(document)
             schedule_document_indexing(document.id)
+
 
         except Exception as proc_error:
 
@@ -302,6 +323,9 @@ def list_documents(
     search: str | None = Query(
         None,
     ),
+    department: str | None = Query(
+        None,
+    ),
     document_type: str | None = Query(
         None,
     ),
@@ -311,14 +335,12 @@ def list_documents(
     status: str | None = Query(
         None,
     ),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     List documents with pagination, filtering and hybrid search.
-
-    When `search` is provided, results include:
-    - keyword matches (filename, OCR text, extracted fields)
-    - semantic matches from the vector index
+    Enforces department-aware and role-based document access.
     """
 
     query = (
@@ -332,6 +354,36 @@ def list_documents(
             ExtractedField.document_id == Document.id,
         )
     )
+
+    # --------------------------------------------------------
+    # RBAC & DEPARTMENT ACCESS FILTERING
+    # --------------------------------------------------------
+    user_role = UserRole.normalize(current_user.role)
+    if user_role == UserRole.ADMIN.value:
+        if department:
+            query = query.filter(Document.department.ilike(f"%{department.strip()}%"))
+    elif user_role == UserRole.UPLOAD_MAKER.value:
+        maker_dept = (current_user.department or "").strip()
+        if maker_dept:
+            query = query.filter(
+                or_(
+                    Document.department.ilike(f"%{maker_dept}%"),
+                    Document.uploaded_by == current_user.id,
+                )
+            )
+        else:
+            query = query.filter(Document.uploaded_by == current_user.id)
+        if department:
+            query = query.filter(Document.department.ilike(f"%{department.strip()}%"))
+    elif user_role == UserRole.UPLOAD_CHECKER.value:
+        checker_dept = (current_user.department or "").strip()
+        query = query.filter(Document.assigned_checker == current_user.id)
+        if checker_dept:
+            query = query.filter(Document.department.ilike(f"%{checker_dept}%"))
+        if department:
+            query = query.filter(Document.department.ilike(f"%{department.strip()}%"))
+
+
 
     # --------------------------------------------------------
     # KEYWORD SEARCH
@@ -506,11 +558,51 @@ def dashboard_stats(
 # ============================================================
 
 @router.get(
+    "/review/queue",
+    response_model=list[DocumentDetailResponse],
+    summary="Get documents awaiting review",
+)
+def get_review_queue(
+    current_user: User = Depends(require_upload_checker),
+    db: Session = Depends(get_db),
+):
+    user_role = UserRole.normalize(current_user.role)
+    query = (
+        db.query(Document)
+        .options(
+            selectinload(Document.pages),
+            selectinload(Document.ocr_results),
+            selectinload(Document.extracted_fields),
+            selectinload(Document.review_items),
+        )
+        .filter(
+            or_(
+                Document.status.ilike("%PENDING%"),
+                Document.status.ilike("%NEEDS%"),
+                Document.status == "needs_review",
+            )
+        )
+    )
+    if user_role == UserRole.UPLOAD_CHECKER.value:
+        checker_dept = (current_user.department or "").strip()
+        query = query.filter(Document.assigned_checker == current_user.id)
+        if checker_dept:
+            query = query.filter(Document.department.ilike(f"%{checker_dept}%"))
+    return query.order_by(Document.uploaded_at.desc()).all()
+
+
+
+# ============================================================
+# GET ONE DOCUMENT
+# ============================================================
+
+@router.get(
     "/{document_id}",
     response_model=DocumentDetailResponse,
 )
 def get_document(
     document_id: int,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -538,7 +630,6 @@ def get_document(
     )
 
     if not document:
-
         raise HTTPException(
             status_code=404,
             detail=(
@@ -547,6 +638,162 @@ def get_document(
             ),
         )
 
+    verify_document_view_access(document, current_user)
+    return document
+
+
+# ============================================================
+# DOCUMENT REVIEW ACTIONS (UPLOAD_CHECKER / ADMIN)
+# ============================================================
+
+@router.post(
+    "/{document_id}/approve",
+    response_model=DocumentResponse,
+    summary="Approve a document (Upload Checker / Admin)",
+)
+def approve_document(
+    document_id: int,
+    current_user: User = Depends(require_upload_checker),
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    verify_document_review_access(document, current_user)
+
+    document.status = DocumentStatus.APPROVED.value
+    document.updated_at = func.now()
+
+    review_item = (
+        db.query(ReviewQueue)
+        .filter(ReviewQueue.document_id == document_id)
+        .order_by(ReviewQueue.id.desc())
+        .first()
+    )
+    if review_item:
+        review_item.status = "approved"
+        review_item.reviewed_by = current_user.id
+        review_item.reviewed_at = func.now()
+
+    db.commit()
+    db.refresh(document)
+    return document
+
+
+@router.post(
+    "/{document_id}/reject",
+    response_model=DocumentResponse,
+    summary="Reject a document (Upload Checker / Admin)",
+)
+def reject_document(
+    document_id: int,
+    payload: ReviewActionRequest = ReviewActionRequest(),
+    current_user: User = Depends(require_upload_checker),
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    verify_document_review_access(document, current_user)
+
+    document.status = DocumentStatus.REJECTED.value
+    document.updated_at = func.now()
+
+    review_item = (
+        db.query(ReviewQueue)
+        .filter(ReviewQueue.document_id == document_id)
+        .order_by(ReviewQueue.id.desc())
+        .first()
+    )
+    if review_item:
+        review_item.status = "rejected"
+        if payload.reason:
+            review_item.reason = payload.reason
+        review_item.reviewed_by = current_user.id
+        review_item.reviewed_at = func.now()
+
+    db.commit()
+    db.refresh(document)
+    return document
+
+
+@router.post(
+    "/{document_id}/request-revision",
+    response_model=DocumentResponse,
+    summary="Request revision on a document (Upload Checker / Admin)",
+)
+def request_document_revision(
+    document_id: int,
+    payload: ReviewActionRequest = ReviewActionRequest(),
+    current_user: User = Depends(require_upload_checker),
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    verify_document_review_access(document, current_user)
+
+    document.status = DocumentStatus.NEEDS_REVISION.value
+    document.updated_at = func.now()
+
+    review_item = (
+        db.query(ReviewQueue)
+        .filter(ReviewQueue.document_id == document_id)
+        .order_by(ReviewQueue.id.desc())
+        .first()
+    )
+    if review_item:
+        review_item.status = "needs_revision"
+        if payload.notes or payload.reason:
+            review_item.reason = payload.notes or payload.reason
+        review_item.reviewed_by = current_user.id
+        review_item.reviewed_at = func.now()
+
+    db.commit()
+    db.refresh(document)
+    return document
+
+
+@router.post(
+    "/{document_id}/assign",
+    response_model=DocumentResponse,
+    summary="Assign an Upload Checker to a document (Admin only)",
+)
+def assign_document_checker(
+    document_id: int,
+    payload: AssignCheckerRequest,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    checker = db.query(User).filter(User.id == payload.checker_id).first()
+    if not checker:
+        raise HTTPException(status_code=404, detail=f"User with ID {payload.checker_id} not found")
+
+    checker_role = UserRole.normalize(checker.role)
+    if checker_role not in (UserRole.UPLOAD_CHECKER.value, UserRole.ADMIN.value):
+        raise HTTPException(status_code=400, detail="Assigned user must be an Upload Checker or Admin")
+
+    document.assigned_checker = payload.checker_id
+    document.updated_at = func.now()
+
+    review_item = (
+        db.query(ReviewQueue)
+        .filter(ReviewQueue.document_id == document_id)
+        .order_by(ReviewQueue.id.desc())
+        .first()
+    )
+    if review_item:
+        review_item.assigned_to = payload.checker_id
+
+    db.commit()
+    db.refresh(document)
     return document
 
 
@@ -560,6 +807,7 @@ def get_document(
 )
 def delete_document(
     document_id: int,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     document = (
@@ -571,11 +819,19 @@ def delete_document(
     )
 
     if not document:
-
         raise HTTPException(
             status_code=404,
             detail="Document not found.",
         )
+
+    # Only admin or uploader can delete
+    user_role = UserRole.normalize(current_user.role)
+    if user_role != UserRole.ADMIN.value and document.uploaded_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access forbidden: Only Administrators or the document uploader can delete this document",
+        )
+
 
     try:
 

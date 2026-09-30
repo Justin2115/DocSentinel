@@ -14,11 +14,17 @@ interface AuthContextType {
 	token: string | null;
 	isAuthenticated: boolean;
 	isAdmin: boolean;
+	isUploadMaker: boolean;
+	isUploadChecker: boolean;
+	canUpload: boolean;
+	canReview: boolean;
+	department: string | null;
 	isLoading: boolean;
 	login: (token: string, userData?: User) => Promise<void>;
 	logout: () => void;
 	refreshUser: () => Promise<void>;
 }
+
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -90,7 +96,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 	}, []);
 
 	const isAuthenticated = Boolean(token && user);
-	const isAdmin = Boolean(user && user.role === "admin");
+	const normalizedRole = user?.role ? user.role.toUpperCase() : "";
+	const isAdmin = Boolean(user && (normalizedRole === "ADMIN" || user.role === "admin"));
+	const isUploadMaker = Boolean(isAdmin || normalizedRole === "UPLOAD_MAKER" || user?.role === "user");
+	const isUploadChecker = Boolean(isAdmin || normalizedRole === "UPLOAD_CHECKER");
+	const canUpload = isAdmin || isUploadMaker;
+	const canReview = isAdmin || isUploadChecker;
+	const department = user?.department || null;
 
 	const contextValue = useMemo(
 		() => ({
@@ -98,13 +110,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 			token,
 			isAuthenticated,
 			isAdmin,
+			isUploadMaker,
+			isUploadChecker,
+			canUpload,
+			canReview,
+			department,
 			isLoading,
 			login,
 			logout,
 			refreshUser,
 		}),
-		[user, token, isAuthenticated, isAdmin, isLoading, login, logout, refreshUser]
+		[
+			user,
+			token,
+			isAuthenticated,
+			isAdmin,
+			isUploadMaker,
+			isUploadChecker,
+			canUpload,
+			canReview,
+			department,
+			isLoading,
+			login,
+			logout,
+			refreshUser,
+		]
 	);
+
 
 	return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;
 };

@@ -6,22 +6,27 @@ import {
 	Chip,
 	CircularProgress,
 	IconButton,
+	MenuItem,
 	Paper,
+	Select,
+	Snackbar,
 	Table,
 	TableBody,
 	TableCell,
 	TableContainer,
 	TableHead,
 	TableRow,
+	Tooltip,
 	Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import PeopleIcon from "@mui/icons-material/People";
 import SecurityIcon from "@mui/icons-material/Security";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import CloudUploadIcon from "@mui/icons-material/CloudUpload";
+import FactCheckIcon from "@mui/icons-material/FactCheck";
 
-import { getAdminUsers } from "../api/auth";
+import { getAdminUsers, updateAdminUser } from "../api/auth";
 import type { User } from "../api/auth";
 import { useAuth } from "../context/AuthContext";
 
@@ -30,6 +35,8 @@ export default function Admin() {
 	const [users, setUsers] = useState<User[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
+	const [successMsg, setSuccessMsg] = useState<string | null>(null);
+	const [updatingUserId, setUpdatingUserId] = useState<number | null>(null);
 
 	const fetchUsers = async () => {
 		try {
@@ -51,8 +58,51 @@ export default function Admin() {
 		fetchUsers();
 	}, []);
 
-	const adminCount = users.filter((u) => u.role === "admin").length;
-	const userCount = users.filter((u) => u.role === "user").length;
+	const normalizeRole = (role: string) => {
+		const r = (role || "").toUpperCase();
+		if (r === "ADMIN" || r === "ADMINISTRATOR") return "ADMIN";
+		if (r === "UPLOAD_CHECKER" || r === "CHECKER") return "UPLOAD_CHECKER";
+		return "UPLOAD_MAKER";
+	};
+
+	const handleRoleChange = async (userId: number, newRole: string) => {
+		try {
+			setUpdatingUserId(userId);
+			setError(null);
+			const updated = await updateAdminUser(userId, { role: newRole });
+			setUsers((prev) =>
+				prev.map((u) => (u.id === userId ? { ...u, role: updated.role } : u))
+			);
+			setSuccessMsg(`Role for user #${userId} updated to ${newRole}`);
+		} catch (err: any) {
+			console.error("Failed to update role:", err);
+			setError(err.response?.data?.detail || "Failed to update user role");
+		} finally {
+			setUpdatingUserId(null);
+		}
+	};
+
+	const handleDepartmentChange = async (userId: number, newDept: string) => {
+		try {
+			setUpdatingUserId(userId);
+			setError(null);
+			const deptValue = newDept === "NONE" || !newDept ? null : newDept;
+			const updated = await updateAdminUser(userId, { department: deptValue });
+			setUsers((prev) =>
+				prev.map((u) => (u.id === userId ? { ...u, department: updated.department } : u))
+			);
+			setSuccessMsg(`Department for user #${userId} updated to ${deptValue || "None"}`);
+		} catch (err: any) {
+			console.error("Failed to update department:", err);
+			setError(err.response?.data?.detail || "Failed to update user department");
+		} finally {
+			setUpdatingUserId(null);
+		}
+	};
+
+	const adminCount = users.filter((u) => normalizeRole(u.role) === "ADMIN").length;
+	const makerCount = users.filter((u) => normalizeRole(u.role) === "UPLOAD_MAKER").length;
+	const checkerCount = users.filter((u) => normalizeRole(u.role) === "UPLOAD_CHECKER").length;
 
 	return (
 		<Box sx={{ p: { xs: 2, sm: 3 } }}>
@@ -96,7 +146,7 @@ export default function Admin() {
 			</Box>
 
 			{error && (
-				<Alert severity="error" sx={{ mb: 3, borderRadius: "10px" }}>
+				<Alert severity="error" sx={{ mb: 3, borderRadius: "10px" }} onClose={() => setError(null)}>
 					{error}
 				</Alert>
 			)}
@@ -105,7 +155,7 @@ export default function Admin() {
 			<Box
 				sx={{
 					display: "grid",
-					gridTemplateColumns: { xs: "1fr", sm: "repeat(3, 1fr)" },
+					gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", lg: "repeat(4, 1fr)" },
 					gap: 2,
 					mb: 4,
 				}}
@@ -157,13 +207,32 @@ export default function Admin() {
 					}}
 				>
 					<Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1 }}>
-						<CheckCircleIcon sx={{ color: "#34d399" }} />
+						<CloudUploadIcon sx={{ color: "#38bdf8" }} />
 						<Typography variant="subtitle2" sx={{ color: "var(--text, #9ca3af)" }}>
-							Standard Users
+							Upload Makers
 						</Typography>
 					</Box>
 					<Typography variant="h4" sx={{ fontWeight: 700 }}>
-						{loading ? "..." : userCount}
+						{loading ? "..." : makerCount}
+					</Typography>
+				</Paper>
+
+				<Paper
+					sx={{
+						p: 2.5,
+						borderRadius: "16px",
+						background: "rgba(255, 255, 255, 0.03)",
+						border: "1px solid rgba(255, 255, 255, 0.08)",
+					}}
+				>
+					<Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1 }}>
+						<FactCheckIcon sx={{ color: "#34d399" }} />
+						<Typography variant="subtitle2" sx={{ color: "var(--text, #9ca3af)" }}>
+							Upload Checkers
+						</Typography>
+					</Box>
+					<Typography variant="h4" sx={{ fontWeight: 700 }}>
+						{loading ? "..." : checkerCount}
 					</Typography>
 				</Paper>
 			</Box>
@@ -184,6 +253,7 @@ export default function Admin() {
 							<TableCell sx={{ fontWeight: 600 }}>User</TableCell>
 							<TableCell sx={{ fontWeight: 600 }}>Email</TableCell>
 							<TableCell sx={{ fontWeight: 600 }}>Role</TableCell>
+							<TableCell sx={{ fontWeight: 600 }}>Department</TableCell>
 							<TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
 							<TableCell sx={{ fontWeight: 600 }}>Registered</TableCell>
 							<TableCell sx={{ fontWeight: 600 }}>Last Login</TableCell>
@@ -192,13 +262,13 @@ export default function Admin() {
 					<TableBody>
 						{loading ? (
 							<TableRow>
-								<TableCell colSpan={6} align="center" sx={{ py: 6 }}>
+								<TableCell colSpan={7} align="center" sx={{ py: 6 }}>
 									<CircularProgress size={32} sx={{ color: "var(--accent, #a855f7)" }} />
 								</TableCell>
 							</TableRow>
 						) : users.length === 0 ? (
 							<TableRow>
-								<TableCell colSpan={6} align="center" sx={{ py: 4, color: "#9ca3af" }}>
+								<TableCell colSpan={7} align="center" sx={{ py: 4, color: "#9ca3af" }}>
 									No users found.
 								</TableCell>
 							</TableRow>
@@ -214,6 +284,7 @@ export default function Admin() {
 									: "U";
 
 								const isCurrentUser = currentUser?.id === u.id;
+								const roleVal = normalizeRole(u.role);
 
 								return (
 									<TableRow
@@ -231,7 +302,11 @@ export default function Admin() {
 														width: 36,
 														height: 36,
 														bgcolor:
-															u.role === "admin" ? "#a855f7" : "#4f46e5",
+															roleVal === "ADMIN"
+																? "#a855f7"
+																: roleVal === "UPLOAD_CHECKER"
+																	? "#059669"
+																	: "#2563eb",
 														fontSize: "14px",
 														fontWeight: 600,
 													}}
@@ -268,24 +343,68 @@ export default function Admin() {
 											<Typography variant="body2">{u.email}</Typography>
 										</TableCell>
 										<TableCell>
-											<Chip
-												label={u.role.toUpperCase()}
+											<Tooltip
+												title={
+													isCurrentUser
+														? "You cannot demote or change your own role"
+														: "Select user role"
+												}
+											>
+												<span>
+													<Select
+														size="small"
+														value={roleVal}
+														disabled={isCurrentUser || updatingUserId === u.id}
+														onChange={(e) => handleRoleChange(u.id, e.target.value)}
+														sx={{
+															fontSize: "0.75rem",
+															height: 32,
+															fontWeight: 700,
+															borderRadius: "8px",
+															color:
+																roleVal === "ADMIN"
+																	? "#c084fc"
+																	: roleVal === "UPLOAD_CHECKER"
+																		? "#34d399"
+																		: "#60a5fa",
+															backgroundColor: "rgba(255, 255, 255, 0.05)",
+															"& .MuiOutlinedInput-notchedOutline": {
+																borderColor: "rgba(255, 255, 255, 0.15)",
+															},
+														}}
+													>
+														<MenuItem value="ADMIN">ADMIN</MenuItem>
+														<MenuItem value="UPLOAD_MAKER">UPLOAD_MAKER</MenuItem>
+														<MenuItem value="UPLOAD_CHECKER">UPLOAD_CHECKER</MenuItem>
+													</Select>
+												</span>
+											</Tooltip>
+										</TableCell>
+										<TableCell>
+											<Select
 												size="small"
+												value={u.department?.toUpperCase() || "NONE"}
+												disabled={updatingUserId === u.id}
+												onChange={(e) => handleDepartmentChange(u.id, e.target.value)}
 												sx={{
-													fontWeight: 700,
-													fontSize: "0.7rem",
-													borderRadius: "6px",
-													backgroundColor:
-														u.role === "admin"
-															? "rgba(168, 85, 247, 0.15)"
-															: "rgba(59, 130, 246, 0.15)",
-													color: u.role === "admin" ? "#c084fc" : "#60a5fa",
-													border:
-														u.role === "admin"
-															? "1px solid rgba(168, 85, 247, 0.3)"
-															: "1px solid rgba(59, 130, 246, 0.3)",
+													fontSize: "0.75rem",
+													height: 32,
+													fontWeight: 600,
+													borderRadius: "8px",
+													color: u.department ? "#fbbf24" : "var(--text, #9ca3af)",
+													backgroundColor: "rgba(255, 255, 255, 0.05)",
+													"& .MuiOutlinedInput-notchedOutline": {
+														borderColor: "rgba(255, 255, 255, 0.15)",
+													},
 												}}
-											/>
+											>
+												<MenuItem value="NONE"><em>None</em></MenuItem>
+												<MenuItem value="HR">HR</MenuItem>
+												<MenuItem value="FINANCE">FINANCE</MenuItem>
+												<MenuItem value="LEGAL">LEGAL</MenuItem>
+												<MenuItem value="OPERATIONS">OPERATIONS</MenuItem>
+												<MenuItem value="IT">IT</MenuItem>
+											</Select>
 										</TableCell>
 										<TableCell>
 											<Chip
@@ -317,6 +436,17 @@ export default function Admin() {
 					</TableBody>
 				</Table>
 			</TableContainer>
+
+			<Snackbar
+				open={Boolean(successMsg)}
+				autoHideDuration={4000}
+				onClose={() => setSuccessMsg(null)}
+				anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+			>
+				<Alert severity="success" onClose={() => setSuccessMsg(null)}>
+					{successMsg}
+				</Alert>
+			</Snackbar>
 		</Box>
 	);
 }

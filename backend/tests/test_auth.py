@@ -3,6 +3,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.core.security import create_access_token
 from app.db.session import SessionLocal
 from app.main import app
@@ -21,6 +22,8 @@ def get_test_client():
 class AuthTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if not settings.GOOGLE_CLIENT_ID:
+            settings.GOOGLE_CLIENT_ID = "mock-google-client-id"
         with SessionLocal() as db:
             init_default_admin(db)
         cls.client = TestClient(app)

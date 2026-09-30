@@ -71,11 +71,17 @@ class DocumentResponse(BaseModel):
     file_type: str
     file_size: int | None = None
     document_type: str | None = None
+    department: str | None = None
     status: str | None = None
     uploaded_by: int | None = None
+    assigned_checker: int | None = None
     overall_confidence: float | None = None
     uploaded_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     processed_at: datetime | None = None
+    uploader_name: str | None = None
+    checker_name: str | None = None
 
     model_config = ConfigDict(
         from_attributes=True
@@ -106,3 +112,13 @@ class DashboardStatsResponse(BaseModel):
     pending_review: int
     average_confidence: float | None = None
     recent_documents: list[DocumentResponse]
+
+
+class ReviewActionRequest(BaseModel):
+    reason: str | None = None
+    notes: str | None = None
+
+
+class AssignCheckerRequest(BaseModel):
+    checker_id: int
+

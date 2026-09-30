@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -65,13 +65,86 @@ async def get_current_user(
     return user
 
 
+from app.core.rbac import UserRole, can_review_document, can_view_document
+
+
+async def get_optional_current_user(
+    auth: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """Dependency that returns the current authenticated user if valid token present, otherwise None."""
+    if not auth or not auth.credentials:
+        return None
+    payload = decode_access_token(auth.credentials)
+    if not payload:
+        return None
+    user_id_str = payload.get("sub")
+    if not user_id_str:
+        return None
+    try:
+        user_id = int(user_id_str)
+    except ValueError:
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        return None
+    return user
+
+
 async def require_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:
     """Dependency that enforces admin role access."""
-    if current_user.role != "admin":
+    user_role = UserRole.normalize(current_user.role)
+    if user_role != UserRole.ADMIN.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access forbidden: Admin privileges required",
         )
     return current_user
+
+
+async def require_upload_maker(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Dependency that enforces upload maker or admin access."""
+    user_role = UserRole.normalize(current_user.role)
+    if user_role not in (UserRole.UPLOAD_MAKER.value, UserRole.ADMIN.value):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Upload Maker privileges required",
+        )
+    return current_user
+
+
+async def require_upload_checker(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Dependency that enforces upload checker or admin access."""
+    user_role = UserRole.normalize(current_user.role)
+    if user_role not in (UserRole.UPLOAD_CHECKER.value, UserRole.ADMIN.value):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Upload Checker privileges required",
+        )
+    return current_user
+
+
+def verify_document_view_access(document: Any, user: User) -> None:
+    """Check that user has permission to view the given document."""
+    if not can_view_document(user, document):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: You do not have permission to view documents in this department",
+        )
+
+
+def verify_document_review_access(document: Any, user: User) -> None:
+    """Check that user has permission to review the document and enforce separation of duties."""
+    allowed, error_msg = can_review_document(user, document)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access forbidden: {error_msg}",
+        )
+
