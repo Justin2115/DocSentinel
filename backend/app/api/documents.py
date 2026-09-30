@@ -93,6 +93,15 @@ async def upload_document(
             ),
         )
 
+    # Check upload folder permissions before processing if folder/type requested
+    from app.services.admin_service import check_folder_permission, evaluate_document_routing
+    folder_check_target = document_type or department
+    if folder_check_target and not check_folder_permission(db, folder_check_target, current_user.role, action="upload"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access forbidden: Role '{current_user.role}' is not permitted to upload '{folder_check_target}' documents.",
+        )
+
     try:
         (
             original_filename,
@@ -226,18 +235,25 @@ async def upload_document(
                 db.add(field_row)
 
             # ------------------------------------------------
-            # Department Categorization & Review Queue
+            # Department Categorization, Routing & Review Queue
             # ------------------------------------------------
 
             raw_dept = department or report.department or (current_user.department if current_user else None) or "Operations"
             resolved_dept = Department.normalize(raw_dept) or raw_dept
             resolved_doc_type = document_type or report.document_type or "General Document"
 
+            routed_review, routed_reason, route_to = evaluate_document_routing(
+                db, resolved_doc_type, report.overall_confidence
+            )
+
             final_status = DocumentStatus.PENDING_REVIEW.value
+            review_reason = routed_reason or report.review_reason or "Pending verification"
+            if route_to and route_to not in review_reason:
+                review_reason = f"[{route_to}] {review_reason}"
 
             review_item = ReviewQueue(
                 document_id=document.id,
-                reason=report.review_reason or "Pending verification",
+                reason=review_reason,
                 confidence=report.overall_confidence,
                 status="pending",
             )
@@ -638,7 +654,7 @@ def get_document(
             ),
         )
 
-    verify_document_view_access(document, current_user)
+    verify_document_view_access(document, current_user, db=db)
     return document
 
 
@@ -660,7 +676,7 @@ def approve_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    verify_document_review_access(document, current_user)
+    verify_document_review_access(document, current_user, db=db)
 
     document.status = DocumentStatus.APPROVED.value
     document.updated_at = func.now()
@@ -696,7 +712,7 @@ def reject_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    verify_document_review_access(document, current_user)
+    verify_document_review_access(document, current_user, db=db)
 
     document.status = DocumentStatus.REJECTED.value
     document.updated_at = func.now()
@@ -734,7 +750,7 @@ def request_document_revision(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    verify_document_review_access(document, current_user)
+    verify_document_review_access(document, current_user, db=db)
 
     document.status = DocumentStatus.NEEDS_REVISION.value
     document.updated_at = func.now()

@@ -11,6 +11,8 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 
 
+from app.core.rbac import UserRole
+
 def init_default_admin(db: Session) -> None:
     """Ensure the default admin user exists on startup without overwriting on subsequent runs."""
     admin_email = settings.DEFAULT_ADMIN_EMAIL.strip().lower()
@@ -18,8 +20,8 @@ def init_default_admin(db: Session) -> None:
 
     if existing_admin:
         # If user exists, make sure they have admin role
-        if existing_admin.role != "admin":
-            existing_admin.role = "admin"
+        if not existing_admin.is_admin:
+            existing_admin.role = UserRole.ADMIN.value
             db.commit()
             logger.info("Updated existing user %s to admin role.", admin_email)
         else:
@@ -31,9 +33,10 @@ def init_default_admin(db: Session) -> None:
         name="System Administrator",
         email=admin_email,
         password_hash=hash_password(settings.DEFAULT_ADMIN_PASSWORD),
-        role="admin",
+        role=UserRole.ADMIN.value,
         is_active=True,
     )
+
     db.add(new_admin)
     db.commit()
     db.refresh(new_admin)
@@ -84,7 +87,7 @@ def upsert_google_user(db: Session, google_info: dict[str, Any]) -> User:
         # Update profile info and last login
         if google_id and not user.google_id:
             user.google_id = google_id
-        if name and not user.name:
+        if name and not user.is_admin:
             user.name = name
         if picture:
             user.profile_picture = picture
@@ -94,16 +97,17 @@ def upsert_google_user(db: Session, google_info: dict[str, Any]) -> User:
         logger.info("Existing user %s logged in via Google.", user.email)
         return user
 
-    # 3. Create new user with default role 'user'
+    # 3. Create new user with default role 'UPLOAD_MAKER'
     new_user = User(
         google_id=google_id,
         email=email,
         name=name,
         profile_picture=picture,
-        role="user",
+        role=UserRole.UPLOAD_MAKER.value,
         is_active=True,
         last_login=now,
     )
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)

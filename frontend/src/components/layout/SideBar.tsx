@@ -37,7 +37,9 @@ export default function SideBar() {
     ...(canReview
       ? [{ name: "Review queue", path: "/review", icon: <AssignmentTurnedIn /> }]
       : []),
-    { name: "Settings", path: "/settings", icon: <Settings /> },
+    ...(isAdmin
+      ? [{ name: "Settings", path: "/settings", icon: <Settings /> }]
+      : []),
     ...(isAdmin
       ? [{ name: "Admin Panel", path: "/admin", icon: <AdminPanelSettings /> }]
       : []),

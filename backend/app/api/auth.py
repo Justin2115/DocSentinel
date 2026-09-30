@@ -19,7 +19,7 @@ from app.schemas.auth import (
     UserResponse,
 )
 from app.core.rbac import Department, UserRole
-from app.schemas.user import UserUpdateRequest
+from app.schemas.user import UserRoleAssignRequest, UserUpdateRequest
 from app.services.auth_service import (
     authenticate_user_credentials,
     upsert_google_user,
@@ -147,6 +147,11 @@ async def google_callback(
             url=f"{frontend_url}/login?error=Network%20error%20during%20Google%20login"
         )
 
+    if not google_user_info.get("email_verified"):
+        return RedirectResponse(
+            url=f"{frontend_url}/login?error=Google%20did%20not%20verify%20the%20account%20email"
+        )
+
     # Upsert user in database
     try:
         user = upsert_google_user(db, google_user_info)
@@ -187,12 +192,13 @@ async def admin_login(
             detail="Invalid email or password",
         )
 
-    if user.role != "admin":
+    if not user.is_admin:
         logger.warning("Non-admin user %s attempted admin login.", payload.email)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: Administrator privileges required",
         )
+
 
     token = create_access_token({
         "sub": str(user.id),
@@ -306,9 +312,8 @@ async def update_user_admin(
             )
 
     if payload.role is not None:
-        valid_roles = [r.value for r in UserRole]
-        normalized_role = UserRole.normalize(payload.role)
-        if normalized_role not in valid_roles:
+        normalized_role = UserRole.parse_assignment(payload.role)
+        if normalized_role is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid role '{payload.role}'. Must be one of: {', '.join(valid_roles)}",
@@ -329,6 +334,11 @@ async def update_user_admin(
             target_user.department = normalized_dept
 
     if payload.is_active is not None:
+        if current_user.id == target_user.id and not payload.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Administrators cannot deactivate their own account",
+            )
         target_user.is_active = payload.is_active
 
     if payload.name is not None and payload.name.strip():
@@ -346,51 +356,88 @@ async def update_user_admin(
 )
 async def update_user_role_admin(
     user_id: int,
-    payload: dict,
+    payload: UserRoleAssignRequest,
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    role_val = payload.get("role")
-    if not role_val:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Role field is required",
-        )
     return await update_user_admin(
         user_id=user_id,
-        payload=UserUpdateRequest(role=role_val),
+        payload=UserUpdateRequest(role=payload.role),
         current_user=current_user,
         db=db,
     )
 
 
-# Dedicated admin router mounted at /api/admin
-admin_router = APIRouter(
-    prefix="/api/admin",
-    tags=["Admin Management"],
+from app.api.admin import (
+    create_workflow_rule,
+    delete_user,
+    get_permissions,
+    get_workflow,
+    invite_user,
+    remove_workflow_rule,
+    router as admin_router,
+    update_permissions,
+    update_workflow,
 )
 
-admin_router.add_api_route(
-    "/users",
-    list_users_admin,
+# Register admin routes under /api/auth/admin as well for full compatibility
+router.add_api_route(
+    "/admin/users/invite",
+    invite_user,
+    methods=["POST"],
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Admin only: Invite or create a new team member",
+)
+
+router.add_api_route(
+    "/admin/users/{user_id}",
+    delete_user,
+    methods=["DELETE"],
+    response_model=MessageResponse,
+    summary="Admin only: Deactivate a member",
+)
+
+router.add_api_route(
+    "/admin/permissions",
+    get_permissions,
     methods=["GET"],
-    response_model=list[UserResponse],
-    summary="Admin only: List all users in the system",
+    summary="Admin only: Get permissions matrix",
 )
 
-admin_router.add_api_route(
-    "/users/{user_id}",
-    update_user_admin,
-    methods=["PATCH"],
-    response_model=UserResponse,
-    summary="Admin only: Update a user's role or department",
+router.add_api_route(
+    "/admin/permissions",
+    update_permissions,
+    methods=["PUT"],
+    summary="Admin only: Update permissions matrix",
 )
 
-admin_router.add_api_route(
-    "/users/{user_id}/role",
-    update_user_role_admin,
-    methods=["PATCH"],
-    response_model=UserResponse,
-    summary="Admin only: Update a user's role",
+router.add_api_route(
+    "/admin/workflow",
+    get_workflow,
+    methods=["GET"],
+    summary="Admin only: Get workflow rules",
 )
+
+router.add_api_route(
+    "/admin/workflow",
+    update_workflow,
+    methods=["PUT"],
+    summary="Admin only: Update workflow rules",
+)
+
+router.add_api_route(
+    "/admin/workflow/rules",
+    create_workflow_rule,
+    methods=["POST"],
+    summary="Admin only: Add workflow rule",
+)
+
+router.add_api_route(
+    "/admin/workflow/rules/{rule_id}",
+    remove_workflow_rule,
+    methods=["DELETE"],
+    summary="Admin only: Remove workflow rule",
+)
+
 

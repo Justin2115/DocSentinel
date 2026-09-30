@@ -124,14 +124,17 @@ Configure these in `backend/.env` (and set production secrets on your server):
 
 ## 5. Role-Based Access Control (RBAC)
 
-The system supports two core roles:
+The system supports exactly three application roles:
 
-1. **`user`** (Default for all accounts created via Google OAuth):
-   * Access to document uploading, library search, AI Q&A, and personal profile.
-   * Denied access to administrator routes and endpoints.
-2. **`admin`** (Assigned to the initialized default administrator or elevated users):
-   * Access to all standard user features.
-   * Access to the **Admin Panel** (`/admin`), viewing registered user accounts, monitoring system roles, and inspecting system activity.
+1. **`Admin`**: Full application access, including account, permission, workflow, and administrative management.
+2. **`Upload Maker`**: Document upload access allowed by the folder permission matrix.
+3. **`Upload Checker`**: Assigned review access allowed by the folder permission matrix.
+
+Google OAuth accounts default to `Upload Maker`. Role changes are stored on the user record and are read from the database for each authenticated request.
+
+### Member Invitations
+
+The Admin Settings page creates an active, passwordless account with the selected role. The application has no email delivery provider, so no invitation email is sent. The invited person signs in with Google using the same email address; Google OAuth links that verified account to the invitation. No additional mail environment variables are required.
 
 ### Backend Authorization Checks
 
@@ -148,8 +151,8 @@ Security is enforced at the **API layer**, never relying solely on frontend cont
 ### Frontend Route Guards
 
 * **`ProtectedRoute`** in [RouteGuards.tsx](file:///c:/Users/kunju/OneDrive/Documents/Major%20Proj/DocSentinel/frontend/src/routes/RouteGuards.tsx): Blocks unauthenticated visitors and redirects to `/login`.
-* **`AdminRoute`** in [RouteGuards.tsx](file:///c:/Users/kunju/OneDrive/Documents/Major%20Proj/DocSentinel/frontend/src/routes/RouteGuards.tsx): Verifies `isAdmin`. If a regular user navigates directly to `/admin`, they are redirected to `/dashboard`.
-* The sidebar navigation hides the "Admin Panel" link unless `user.role === 'admin'`.
+* **`AdminRoute`** in `frontend/src/routes/RouteGuards.tsx` protects both `/admin` and `/settings`, redirecting non-admin users to `/dashboard`.
+* The sidebar hides Settings and Admin Panel from non-admin users.
 
 ---
 

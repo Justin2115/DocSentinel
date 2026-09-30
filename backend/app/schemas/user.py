@@ -11,8 +11,17 @@ class UserUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
 
 
+class UserInviteRequest(BaseModel):
+    name: str
+    email: str
+    role: str = "UPLOAD_MAKER"
+    department: Optional[str] = None
+    password: Optional[str] = None
+
+
 class UserRoleAssignRequest(BaseModel):
     role: str
+
 
 
 class UserDepartmentAssignRequest(BaseModel):

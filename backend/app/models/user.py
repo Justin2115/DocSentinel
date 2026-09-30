@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -8,6 +8,12 @@ from app.db.base import Base
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('ADMIN', 'UPLOAD_MAKER', 'UPLOAD_CHECKER')",
+            name="ck_users_supported_role",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -66,12 +72,16 @@ class User(Base):
 
     @property
     def is_admin(self) -> bool:
-        return (self.role or "").strip().upper() == "ADMIN"
+        from app.core.rbac import UserRole
+        return UserRole.normalize(self.role) == UserRole.ADMIN.value
 
     @property
     def is_maker(self) -> bool:
-        return (self.role or "").strip().upper() in ("UPLOAD_MAKER", "MAKER", "USER", "ADMIN")
+        from app.core.rbac import UserRole
+        return UserRole.normalize(self.role) in (UserRole.UPLOAD_MAKER.value, UserRole.ADMIN.value)
 
     @property
     def is_checker(self) -> bool:
-        return (self.role or "").strip().upper() in ("UPLOAD_CHECKER", "CHECKER", "ADMIN")
+        from app.core.rbac import UserRole
+        return UserRole.normalize(self.role) in (UserRole.UPLOAD_CHECKER.value, UserRole.ADMIN.value)
+

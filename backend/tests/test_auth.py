@@ -45,7 +45,7 @@ class AuthTestCase(unittest.TestCase):
         data = response.json()
         self.assertIn("access_token", data)
         self.assertEqual(data["token_type"], "bearer")
-        self.assertEqual(data["user"]["role"], "admin")
+        self.assertEqual(data["user"]["role"].upper(), "ADMIN")
         self.assertEqual(data["user"]["email"], "admin@docsentinel.local")
         self.assertNotIn("password_hash", data["user"])
 
@@ -78,7 +78,7 @@ class AuthTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         user = response.json()
         self.assertEqual(user["email"], "admin@docsentinel.local")
-        self.assertEqual(user["role"], "admin")
+        self.assertEqual(user["role"].upper(), "ADMIN")
 
     def test_get_current_user_unauthorized(self):
         response = self.client.get("/api/auth/me")
@@ -101,13 +101,13 @@ class AuthTestCase(unittest.TestCase):
                     "picture": "https://example.com/avatar.jpg",
                 },
             )
-            self.assertEqual(regular_user.role, "user")
+            self.assertEqual(regular_user.role, "UPLOAD_MAKER")
             user_id = regular_user.id
 
         user_token = create_access_token({
             "sub": str(user_id),
             "email": "student@example.com",
-            "role": "user",
+            "role": "UPLOAD_MAKER",
         })
 
         response = self.client.get(
@@ -144,7 +144,7 @@ class AuthTestCase(unittest.TestCase):
             }
             user1 = upsert_google_user(db, google_payload)
             self.assertIsNotNone(user1.id)
-            self.assertEqual(user1.role, "user")
+            self.assertEqual(user1.role, "UPLOAD_MAKER")
             self.assertEqual(user1.email, "googleuser@example.com")
             initial_id = user1.id
 
@@ -157,6 +157,7 @@ class AuthTestCase(unittest.TestCase):
             user2 = upsert_google_user(db, google_payload_updated)
             self.assertEqual(user2.id, initial_id)
             self.assertEqual(user2.profile_picture, "https://example.com/newpic.png")
+
 
 
 if __name__ == "__main__":

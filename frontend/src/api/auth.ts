@@ -101,7 +101,107 @@ export async function updateUserRole(
 	userId: number,
 	role: string
 ): Promise<User> {
-	const response = await apiClient.patch<User>(`/auth/admin/users/${userId}/role`, { role });
+	const response = await apiClient.patch<User>(`/admin/users/${userId}/role`, { role });
 	return response.data;
 }
+
+export interface UserInvitePayload {
+	name: string;
+	email: string;
+	role: string;
+	department?: string | null;
+	password?: string;
+}
+
+/**
+ * Admin only: Invite a new user
+ */
+export async function inviteAdminUser(payload: UserInvitePayload): Promise<User> {
+	const response = await apiClient.post<User>("/admin/users/invite", payload);
+	return response.data;
+}
+
+/**
+ * Admin only: Deactivate/delete a user
+ */
+export async function deleteAdminUser(userId: number): Promise<{ message: string }> {
+	const response = await apiClient.delete<{ message: string }>(`/admin/users/${userId}`);
+	return response.data;
+}
+
+export interface FolderPermissionItem {
+	folder: string;
+	admin: boolean;
+	upload_maker: boolean;
+	upload_checker: boolean;
+}
+
+/**
+ * Admin only: Get folder access permissions matrix
+ */
+export async function getPermissionsMatrix(): Promise<FolderPermissionItem[]> {
+	const response = await apiClient.get<FolderPermissionItem[]>("/admin/permissions");
+	return response.data;
+}
+
+/**
+ * Admin only: Save permissions matrix
+ */
+export async function updatePermissionsMatrix(
+	permissions: FolderPermissionItem[]
+): Promise<FolderPermissionItem[]> {
+	const response = await apiClient.put<FolderPermissionItem[]>("/admin/permissions", permissions);
+	return response.data;
+}
+
+export interface WorkflowRule {
+	id?: number;
+	type: "warning" | "security" | "claims" | string;
+	title: string;
+	route: string;
+	document_type?: string | null;
+	threshold?: number;
+}
+
+export interface WorkflowConfig {
+	threshold: number;
+	rules: WorkflowRule[];
+}
+
+/**
+ * Admin only: Get workflow settings and routing rules
+ */
+export async function getWorkflowConfig(): Promise<WorkflowConfig> {
+	const response = await apiClient.get<WorkflowConfig>("/admin/workflow");
+	return response.data;
+}
+
+/**
+ * Admin only: Update workflow configuration
+ */
+export async function updateWorkflowConfig(
+	payload: { threshold: number; rules?: WorkflowRule[] }
+): Promise<WorkflowConfig> {
+	const response = await apiClient.put<WorkflowConfig>("/admin/workflow", payload);
+	return response.data;
+}
+
+/**
+ * Admin only: Add a new routing rule
+ */
+export async function addWorkflowRule(
+	payload: { title: string; route: string; type?: string; threshold?: number; document_type?: string | null }
+): Promise<WorkflowRule> {
+	const response = await apiClient.post<WorkflowRule>("/admin/workflow/rules", payload);
+	return response.data;
+}
+
+/**
+ * Admin only: Delete a routing rule
+ */
+export async function deleteWorkflowRule(ruleId: number): Promise<{ message: string }> {
+	const response = await apiClient.delete<{ message: string }>(`/admin/workflow/rules/${ruleId}`);
+	return response.data;
+}
+
 

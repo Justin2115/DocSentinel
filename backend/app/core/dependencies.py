@@ -130,16 +130,27 @@ async def require_upload_checker(
     return current_user
 
 
-def verify_document_view_access(document: Any, user: User) -> None:
+def verify_document_view_access(document: Any, user: User, db: Optional[Session] = None) -> None:
     """Check that user has permission to view the given document."""
     if not can_view_document(user, document):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access forbidden: You do not have permission to view documents in this department",
         )
+    if db is not None:
+        from app.services.admin_service import check_folder_permission
+        doc_folder = getattr(document, "document_type", None) or getattr(document, "department", None)
+        if doc_folder and not check_folder_permission(db, doc_folder, user.role, action="view"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: Role '{user.role}' does not have view permission for '{doc_folder}' documents",
+            )
 
 
-def verify_document_review_access(document: Any, user: User) -> None:
+
+def verify_document_review_access(
+    document: Any, user: User, db: Optional[Session] = None
+) -> None:
     """Check that user has permission to review the document and enforce separation of duties."""
     allowed, error_msg = can_review_document(user, document)
     if not allowed:
@@ -147,4 +158,12 @@ def verify_document_review_access(document: Any, user: User) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access forbidden: {error_msg}",
         )
+    if db is not None:
+        from app.services.admin_service import check_folder_permission
+        doc_folder = getattr(document, "document_type", None) or getattr(document, "department", None)
+        if doc_folder and not check_folder_permission(db, doc_folder, user.role, action="review"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: Role '{user.role}' does not have review permission for '{doc_folder}' documents",
+            )
 

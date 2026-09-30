@@ -12,6 +12,7 @@ export default function TopBar() {
   const [open, setOpen] = useState(false);
   const { user, isAdmin, logout: authLogout } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
+  const [failedProfilePicture, setFailedProfilePicture] = useState<string | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -34,10 +35,17 @@ export default function TopBar() {
   }, []);
 
   const displayName = user?.name || "User";
-  const displayRole = user?.role
-    ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
-    : "User";
-  const profilePicture = user?.profile_picture;
+  const normalizedRole = user?.role.toUpperCase();
+  const displayRole = normalizedRole === "ADMIN"
+    ? "Admin"
+    : normalizedRole === "UPLOAD_CHECKER"
+      ? "Upload Checker"
+      : normalizedRole === "UPLOAD_MAKER"
+        ? "Upload Maker"
+        : "User";
+  const profilePicture = user?.profile_picture && user.profile_picture !== failedProfilePicture
+    ? user.profile_picture
+    : undefined;
 
   const initials = displayName
     .split(" ")
@@ -104,6 +112,7 @@ export default function TopBar() {
               <img
                 src={profilePicture}
                 alt={displayName}
+                onError={() => setFailedProfilePicture(profilePicture)}
                 style={{
                   width: 34,
                   height: 34,
@@ -129,6 +138,7 @@ export default function TopBar() {
                   <img
                     src={profilePicture}
                     alt={displayName}
+                    onError={() => setFailedProfilePicture(profilePicture)}
                     style={{
                       width: 40,
                       height: 40,

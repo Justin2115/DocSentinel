@@ -92,11 +92,11 @@ const AppRoutes = () => {
 			<Route
 				path="/settings"
 				element={
-					<ProtectedRoute>
+					<AdminRoute>
 						<PageLayout>
 							<Settings />
 						</PageLayout>
-					</ProtectedRoute>
+					</AdminRoute>
 				}
 			/>
 

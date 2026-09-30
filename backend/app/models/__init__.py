@@ -5,7 +5,9 @@ from app.models.document import (
     OCRResult,
     ReviewQueue,
 )
+from app.models.permission import FolderPermission
 from app.models.user import User
+from app.models.workflow import WorkflowRule, WorkflowSetting
 
 __all__ = [
     "Document",
@@ -14,4 +16,8 @@ __all__ = [
     "ExtractedField",
     "ReviewQueue",
     "User",
+    "FolderPermission",
+    "WorkflowSetting",
+    "WorkflowRule",
 ]
+

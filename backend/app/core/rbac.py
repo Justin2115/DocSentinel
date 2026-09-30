@@ -12,14 +12,31 @@ class UserRole(str, Enum):
         """Normalize role string case-insensitively, handling legacy 'admin' and 'user'."""
         if not role_str:
             return cls.UPLOAD_MAKER.value
-        upper = role_str.strip().upper()
-        if upper in ("ADMIN", "ADMINISTRATOR"):
+        clean = role_str.strip().upper().replace(" ", "_")
+        if clean in ("ADMIN", "ADMINISTRATOR"):
             return cls.ADMIN.value
-        if upper in ("UPLOAD_CHECKER", "CHECKER"):
+        if clean in ("UPLOAD_CHECKER", "CHECKER"):
             return cls.UPLOAD_CHECKER.value
-        if upper in ("UPLOAD_MAKER", "MAKER", "USER"):
+        if clean in ("UPLOAD_MAKER", "MAKER", "USER", "EDITOR", "VIEWER"):
             return cls.UPLOAD_MAKER.value
-        return upper
+        return cls.UPLOAD_MAKER.value
+
+    @classmethod
+    def parse_assignment(cls, role_str: str | None) -> str | None:
+        """Accept only the three supported role values for new assignments."""
+        if not role_str:
+            return None
+        clean = role_str.strip().upper().replace(" ", "_")
+        return clean if clean in {role.value for role in cls} else None
+
+    @classmethod
+    def to_display_label(cls, role_str: str | None) -> str:
+        norm = cls.normalize(role_str)
+        if norm == cls.ADMIN.value:
+            return "Admin"
+        if norm == cls.UPLOAD_CHECKER.value:
+            return "Upload Checker"
+        return "Upload Maker"
 
 
 # Legacy alias
