@@ -128,9 +128,9 @@ async def upload_document(
         )
 
         db.add(document)
-        db.commit()
-        db.refresh(document)
+        db.flush()
         document_id = document.id
+        db.commit()
         recycle_connection(db)
 
 
@@ -141,7 +141,7 @@ async def upload_document(
 
             logger.info(
                 "Starting OCR for document %s (%s, lang=%s)",
-                document.id,
+                document_id,
                 original_filename,
                 norm_lang,
             )
@@ -152,7 +152,7 @@ async def upload_document(
             )
             logger.info(
                 "OCR finished for document %s engine=%s pages=%s",
-                document.id,
+                document_id,
                 ocr_res.ocr_engine,
                 len(ocr_res.pages),
             )
@@ -305,8 +305,10 @@ async def upload_document(
         )
 
     except Exception as error:
-
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            recycle_connection(db)
 
         logger.error(
             f"Document upload error: {error}",

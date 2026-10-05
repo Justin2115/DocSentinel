@@ -33,16 +33,13 @@ SessionLocal = sessionmaker(
 
 
 def recycle_connection(db: Session) -> None:
-    """Drop the current DBAPI connection so long OCR does not sit on a dead Neon SSL session."""
+    """Release the pooled connection. Session.close() is reusable in SQLAlchemy 2."""
     try:
-        if db.in_transaction():
-            db.rollback()
+        db.rollback()
     except Exception:
         pass
-    try:
-        db.connection().invalidate()
-    except Exception:
-        pass
+    db.expunge_all()
+    db.close()
 
 
 def get_db():
