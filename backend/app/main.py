@@ -13,6 +13,7 @@ from app.api.search import router as search_router
 
 from app.core.config import settings
 from app.db.base import Base
+from app.db.session import engine_kwargs
 import app.models.document
 import app.models.embedding
 import app.models.permission
@@ -61,8 +62,7 @@ def initialize_database() -> None:
 
     engine = create_engine(
         settings.sqlalchemy_database_url,
-        pool_pre_ping=True,
-        pool_recycle=300,
+        **engine_kwargs(),
     )
     Base.metadata.create_all(engine)
 

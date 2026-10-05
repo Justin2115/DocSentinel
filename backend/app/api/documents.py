@@ -23,7 +23,7 @@ from app.core.dependencies import (
     verify_document_view_access,
 )
 from app.core.rbac import Department, DocumentStatus, UserRole
-from app.db.session import get_db
+from app.db.session import get_db, recycle_connection
 from app.models.document import (
     Document,
     DocumentPage,
@@ -130,11 +130,13 @@ async def upload_document(
         db.add(document)
         db.commit()
         db.refresh(document)
+        document_id = document.id
+        recycle_connection(db)
 
 
         try:
             # ------------------------------------------------
-            # OCR
+            # OCR (do not hold a Neon connection open during this)
             # ------------------------------------------------
 
             logger.info(
@@ -160,6 +162,9 @@ async def upload_document(
             # ------------------------------------------------
 
             page_obj_map: dict[int, DocumentPage] = {}
+            document = db.get(Document, document_id)
+            if document is None:
+                raise RuntimeError(f"Document {document_id} missing after OCR")
 
             if ocr_res.pages:
 
@@ -281,14 +286,14 @@ async def upload_document(
                 exc_info=True,
             )
 
-            db.rollback()
-
-            document.status = "failed"
-            document.processed_at = func.now()
-
-            db.add(document)
-            db.commit()
-            db.refresh(document)
+            recycle_connection(db)
+            document = db.get(Document, document_id)
+            if document is not None:
+                document.status = "failed"
+                document.processed_at = func.now()
+                db.add(document)
+                db.commit()
+                db.refresh(document)
 
         return document
 
