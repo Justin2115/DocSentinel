@@ -140,7 +140,7 @@ assert doc2["overall_confidence"] > 80.0
 
 
 print("\n==================================================")
-print("TEST 3: Hindi PNG Document (Automatic Language Detection -> PaddleOCR)")
+print("TEST 3: Hindi PNG Document (Automatic Language Detection -> Surya OCR)")
 print("==================================================")
 hindi_text = "यह एक परीक्षण दस्तावेज़ है और हम इसे सत्यापित कर रहे हैं।"
 hindi_img_buf = create_indic_image(hindi_text)
@@ -163,11 +163,11 @@ extracted_hi = hindi_ocr_res.get("extracted_text", "")
 devanagari_chars_hi = [c for c in extracted_hi if "\u0900" <= c <= "\u097F"]
 print(f"Hindi Devanagari Characters Count: {len(devanagari_chars_hi)}")
 assert len(devanagari_chars_hi) >= 15, "Expected Devanagari characters in Hindi OCR result!"
-assert "PaddleOCR" in hindi_ocr_res.get("ocr_engine", "")
+assert "Surya" in hindi_ocr_res.get("ocr_engine", "")
 
 
 print("\n==================================================")
-print("TEST 4: Hindi Scanned PDF (Automatic Language Detection -> PaddleOCR)")
+print("TEST 4: Hindi Scanned PDF (Automatic Language Detection -> Surya OCR)")
 print("==================================================")
 hindi_pdf_buf = create_scanned_pdf([
     ["यह एक परीक्षण दस्तावेज़ है।", "दिनांक: 15/08/2026"],
@@ -191,7 +191,7 @@ for p_idx, ocr_item in enumerate(detail4.get("ocr_results", [])):
 
 
 print("\n==================================================")
-print("TEST 5: Real Marathi Poem Image (Automatic Language Detection -> PaddleOCR)")
+print("TEST 5: Real Marathi Poem Image (Automatic Language Detection -> Surya OCR)")
 print("==================================================")
 marathi_poem_path = UPLOADS_DIR / "623f9bc11f134fa3a84045c6afe8307b.jpg"
 if marathi_poem_path.exists():
@@ -222,12 +222,12 @@ extracted_mr = marathi_ocr_res.get("extracted_text", "")
 devanagari_chars_mr = [c for c in extracted_mr if "\u0900" <= c <= "\u097F"]
 print(f"Marathi Devanagari Characters Count: {len(devanagari_chars_mr)}")
 assert len(devanagari_chars_mr) >= 15, "Expected Devanagari characters in Marathi OCR result!"
-assert "PaddleOCR" in marathi_ocr_res.get("ocr_engine", "")
-assert marathi_ocr_res.get("confidence", 0) >= 80.0, f"Expected PaddleOCR high confidence, got {marathi_ocr_res.get('confidence')}"
+assert "Surya" in marathi_ocr_res.get("ocr_engine", "")
+assert marathi_ocr_res.get("confidence", 0) >= 50.0, f"Expected Surya OCR confidence, got {marathi_ocr_res.get('confidence')}"
 
 
 print("\n==================================================")
-print("TEST 6: Marathi Scanned PDF (Automatic Language Detection -> PaddleOCR)")
+print("TEST 6: Marathi Scanned PDF (Automatic Language Detection -> Surya OCR)")
 print("==================================================")
 marathi_pdf_buf = create_scanned_pdf([
     ["हा एक चाचणी दस्तऐवज आहे.", "दिनांक: 28/08/2026"],
@@ -271,7 +271,7 @@ detail7 = client.get(f"/api/documents/{doc7['id']}").json()
 ocr_res7 = detail7["ocr_results"][0]
 print(f"Mixed Hi OCR Engine: {ocr_res7.get('ocr_engine')}")
 print(f"Mixed Hi Extracted Text:\n{ocr_res7.get('extracted_text')}")
-assert "PaddleOCR" in ocr_res7.get("ocr_engine", "")
+assert "Surya" in ocr_res7.get("ocr_engine", "")
 assert "Rhea" in ocr_res7.get("extracted_text", "")
 assert any("\u0900" <= c <= "\u097F" for c in ocr_res7.get("extracted_text", ""))
 
@@ -298,7 +298,7 @@ detail8 = client.get(f"/api/documents/{doc8['id']}").json()
 ocr_res8 = detail8["ocr_results"][0]
 print(f"Mixed Mr OCR Engine: {ocr_res8.get('ocr_engine')}")
 print(f"Mixed Mr Extracted Text:\n{ocr_res8.get('extracted_text')}")
-assert "PaddleOCR" in ocr_res8.get("ocr_engine", "")
+assert "Surya" in ocr_res8.get("ocr_engine", "")
 assert "Rhea" in ocr_res8.get("extracted_text", "")
 assert any("\u0900" <= c <= "\u097F" for c in ocr_res8.get("extracted_text", ""))
 

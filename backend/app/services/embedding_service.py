@@ -71,9 +71,18 @@ def persist_dir() -> str:
     return str(path)
 
 
+def preload_embedding_runtime() -> None:
+    """Load PyTorch at startup so embeddings (and Surya, which also uses Torch) share one runtime."""
+    import torch
+
+    logger.info("PyTorch %s ready for embeddings", torch.__version__)
+    _get_model()
+
+
 def _get_model():
     global _model
     if _model is None:
+        import torch  # noqa: F401 — must load before sentence_transformers on Windows
         from sentence_transformers import SentenceTransformer
 
         logger.info("Loading embedding model %s", settings.EMBEDDING_MODEL)
@@ -294,7 +303,12 @@ def semantic_search(
         )
         return SemanticSearchResponse(items=[], total=0, query=term)
 
-    query_embedding = encode_texts([term])[0]
+    try:
+        query_embedding = encode_texts([term])[0]
+    except Exception:
+        logger.exception("Semantic search failed to encode query %r", term)
+        return SemanticSearchResponse(items=[], total=0, query=term)
+
     raw = collection.query(
         query_embeddings=[query_embedding],
         n_results=min(n_results, max(collection.count(), 1)),

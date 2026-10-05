@@ -1,16 +1,16 @@
 import io
+import json
 import logging
 import os
 import re
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass, field
+from html import unescape
 from pathlib import Path
 from typing import Any
 
-# Disable unstable oneDNN primitive execution on CPU
-os.environ["FLAGS_use_mkldnn"] = "0"
-os.environ["FLAGS_use_onednn"] = "0"
-
-import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -56,88 +56,98 @@ HINDI_WORDS = {
     "पता:", "नाम:", "दिनांक:", "हस्ताक्षर", "भारत", "दिल्ली", "उत्तर", "प्रदेश", "सड़क"
 }
 
-# Initialize OCR engines lazily
-_rapid_ocr_engine = None
-_paddle_devanagari_engine = None
-_paddle_english_engine = None
+# Initialize Surya lazily (v1 FoundationPredictor, or v2 InferenceManager)
+_surya_runtime: dict[str, Any] | None | bool = None
 
 
-def get_rapid_ocr_engine():
-    """Lazy loader for RapidOCR (English baseline)."""
-    global _rapid_ocr_engine
-    if _rapid_ocr_engine is None:
-        try:
-            from rapidocr_onnxruntime import RapidOCR
-
-            _rapid_ocr_engine = RapidOCR()
-        except Exception as e:
-            logger.warning(f"Could not initialize RapidOCR engine: {e}")
-            _rapid_ocr_engine = False
-    return _rapid_ocr_engine if _rapid_ocr_engine is not False else None
+def _html_to_text(html: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    return unescape(re.sub(r"\s+", " ", text)).strip()
 
 
-def _ensure_paddle_cpu_stability():
-    """Ensure PaddlePaddle CPU inference disables oneDNN IR passes that cause primitive errors on Windows CPU."""
+def get_surya_runtime() -> dict[str, Any] | None:
+    """Load Surya once. Prefer v1 (pure Torch) so Windows does not need llama.cpp."""
+    global _surya_runtime
+    if _surya_runtime is False:
+        return None
+    if _surya_runtime is not None:
+        return _surya_runtime
+
     try:
-        import paddle.inference as paddle_infer
+        try:
+            from surya.detection import DetectionPredictor
+            from surya.foundation import FoundationPredictor
+            from surya.recognition import RecognitionPredictor
+            from surya.settings import settings
 
-        if not getattr(paddle_infer.Config, "_docsentinel_patched", False):
-            _orig_switch_ir_optim = paddle_infer.Config.switch_ir_optim
+            foundation = FoundationPredictor(
+                checkpoint=settings.RECOGNITION_MODEL_CHECKPOINT
+            )
+            det = DetectionPredictor()
+            rec = RecognitionPredictor(foundation)
+            _surya_runtime = {"kind": "v1", "rec": rec, "det": det}
+            logger.info("Surya OCR ready (v1 FoundationPredictor)")
+            return _surya_runtime
+        except ImportError:
+            from surya.inference import SuryaInferenceManager
+            from surya.recognition import RecognitionPredictor
 
-            def _safe_switch_ir_optim(self, flag):
-                return _orig_switch_ir_optim(self, False)
-
-            paddle_infer.Config.switch_ir_optim = _safe_switch_ir_optim
-            paddle_infer.Config._docsentinel_patched = True
+            manager = SuryaInferenceManager()
+            rec = RecognitionPredictor(manager)
+            _surya_runtime = {"kind": "v2", "rec": rec, "det": None}
+            logger.info("Surya OCR ready (v2 SuryaInferenceManager)")
+            return _surya_runtime
     except Exception:
-        pass
+        logger.exception("Could not initialize Surya OCR")
+        _surya_runtime = False
+        return None
 
 
-def get_paddle_devanagari_engine():
-    """Lazy loader for PaddleOCR Multilingual Devanagari engine."""
-    global _paddle_devanagari_engine
-    if _paddle_devanagari_engine is None:
-        try:
-            _ensure_paddle_cpu_stability()
-            from paddleocr import PaddleOCR
+def _prediction_to_text(pred: Any) -> tuple[str, float]:
+    lines: list[str] = []
+    scores: list[float] = []
 
-            # Initialize PaddleOCR with Devanagari recognition model, CPU execution, stable CPU inference
-            _paddle_devanagari_engine = PaddleOCR(
-                use_angle_cls=False,
-                lang="devanagari",
-                show_log=False,
-                enable_mkldnn=False,
-                use_gpu=False,
-            )
-        except Exception as e:
-            logger.warning(f"Could not initialize PaddleOCR Devanagari engine: {e}")
-            _paddle_devanagari_engine = False
-    return _paddle_devanagari_engine if _paddle_devanagari_engine is not False else None
+    text_lines = getattr(pred, "text_lines", None)
+    if text_lines:
+        for line in text_lines:
+            token = (getattr(line, "text", None) or "").strip()
+            if not token:
+                continue
+            lines.append(token)
+            conf = getattr(line, "confidence", None)
+            if conf is not None:
+                scores.append(float(conf))
+    else:
+        for block in getattr(pred, "blocks", None) or []:
+            html = getattr(block, "html", None) or getattr(block, "text", "") or ""
+            token = _html_to_text(str(html))
+            if not token:
+                continue
+            lines.append(token)
+            conf = getattr(block, "confidence", None)
+            if conf is not None:
+                scores.append(float(conf))
 
-
-def get_paddle_english_engine():
-    """Lazy loader for PaddleOCR English engine."""
-    global _paddle_english_engine
-    if _paddle_english_engine is None:
-        try:
-            _ensure_paddle_cpu_stability()
-            from paddleocr import PaddleOCR
-
-            _paddle_english_engine = PaddleOCR(
-                use_angle_cls=False,
-                lang="en",
-                show_log=False,
-                enable_mkldnn=False,
-                use_gpu=False,
-            )
-        except Exception as e:
-            logger.warning(f"Could not initialize PaddleOCR English engine: {e}")
-            _paddle_english_engine = False
-    return _paddle_english_engine if _paddle_english_engine is not False else None
+    text = "\n".join(lines)
+    if not text:
+        return "", 0.0
+    if scores:
+        avg = sum(scores) / len(scores)
+        if avg <= 1.0:
+            avg *= 100.0
+        return text, round(avg, 2)
+    return text, 85.0
 
 
-
-
+def _engine_label(detected_lang: str) -> str:
+    labels = {
+        "mr": "SuryaOCR-Marathi",
+        "hi": "SuryaOCR-Hindi",
+        "en+mr": "SuryaOCR-Mixed-Marathi",
+        "en+hi": "SuryaOCR-Mixed-Hindi",
+        "en": "SuryaOCR-English",
+    }
+    return labels.get(detected_lang, "SuryaOCR")
 
 @dataclass
 class ExtractedPage:
@@ -286,134 +296,95 @@ def detect_language(text: str) -> tuple[str, float, dict[str, Any]]:
     }
 
 
+def _run_surya_on_image(
+    image: Image.Image, language: str = "auto"
+) -> tuple[str, float, str, str]:
+    """Run Surya in this process. Used by the OCR child, not the API process."""
+    norm_lang = (language or "auto").lower().strip()
+    runtime = get_surya_runtime()
+    if runtime is None:
+        return "", 0.0, "None", "en"
+
+    try:
+        rgb = image.convert("RGB")
+        rec = runtime["rec"]
+        if runtime["kind"] == "v1":
+            predictions = rec([rgb], det_predictor=runtime["det"])
+        else:
+            predictions = rec([rgb])
+
+        if not predictions:
+            return "", 0.0, "SuryaOCR", "en"
+
+        raw_text, conf_pct = _prediction_to_text(predictions[0])
+        if norm_lang == "auto":
+            detected_lang, _, _ = detect_language(raw_text)
+        else:
+            detected_lang = norm_lang
+        return raw_text, conf_pct, _engine_label(detected_lang), detected_lang
+    except Exception:
+        logger.exception("Surya OCR extraction failed")
+        return "", 0.0, "None", "en"
+
+
+def _run_surya_subprocess(
+    image: Image.Image, language: str = "auto"
+) -> tuple[str, float, str, str]:
+    backend_dir = Path(__file__).resolve().parents[2]
+    handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    image_path = handle.name
+    handle.close()
+    try:
+        image.convert("RGB").save(image_path, "PNG")
+        env = os.environ.copy()
+        env["DOC_SENTINEL_SURYA_CHILD"] = "1"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "app.services.surya_worker",
+                image_path,
+                language or "auto",
+            ],
+            cwd=str(backend_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if completed.returncode != 0:
+            logger.error(
+                "Surya OCR worker exited %s: %s",
+                completed.returncode,
+                (completed.stderr or completed.stdout or "")[-2000:],
+            )
+            return "", 0.0, "None", "en"
+        payload = json.loads(completed.stdout.strip().splitlines()[-1])
+        return (
+            payload.get("text") or "",
+            float(payload.get("confidence") or 0),
+            payload.get("engine") or "None",
+            payload.get("language") or "en",
+        )
+    except Exception:
+        logger.exception("Surya OCR worker failed")
+        return "", 0.0, "None", "en"
+    finally:
+        Path(image_path).unlink(missing_ok=True)
+
+
 def _perform_image_ocr(
     image: Image.Image, language: str = "auto"
 ) -> tuple[str, float, str, str]:
     """
-    Perform OCR on a PIL Image:
-    - 'auto': Runs PaddleOCR Multilingual Devanagari model, then automatically classifies language ('en', 'hi', 'mr', 'en+hi', 'en+mr', 'uncertain').
-    - 'en': Runs RapidOCR baseline (with Tesseract fallback).
-    - 'hi' / 'mr': Runs PaddleOCR Devanagari model with designated regional tag.
+    Run Surya OCR on a PIL image, then classify language from the extracted text.
 
-    Returns:
-        tuple[extracted_text, confidence_percent, engine_name, detected_language]
+    The API process uses a child Python process so a native Surya/Torch crash
+    does not take down FastAPI.
     """
-    norm_lang = (language or "auto").lower().strip()
-
-    # 1. Explicit English Request -> RapidOCR Baseline
-    if norm_lang == "en":
-        rapid_engine = get_rapid_ocr_engine()
-        if rapid_engine is not None:
-            try:
-                img_byte_arr = io.BytesIO()
-                image.convert("RGB").save(img_byte_arr, format="PNG")
-                img_bytes = img_byte_arr.getvalue()
-
-                ocr_res, _ = rapid_engine(img_bytes)
-                if ocr_res:
-                    texts = [item[1] for item in ocr_res]
-                    scores = [float(item[2]) for item in ocr_res]
-                    full_text = "\n".join(texts)
-                    avg_confidence = (sum(scores) / len(scores)) if scores else 0.0
-                    return full_text, round(avg_confidence * 100.0, 2), "RapidOCR", "en"
-                else:
-                    return "", 0.0, "RapidOCR", "en"
-            except Exception as e:
-                logger.warning(f"RapidOCR extraction failed: {e}")
-
-        # Tesseract fallback for English
-        try:
-            import pytesseract
-
-            data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
-            confidences = []
-            words = []
-            for i, word in enumerate(data.get("text", [])):
-                if word.strip():
-                    words.append(word)
-                    conf = float(data["conf"][i])
-                    if conf >= 0:
-                        confidences.append(conf)
-
-            full_text = " ".join(words)
-            avg_conf = (sum(confidences) / len(confidences)) if confidences else 70.0
-            return full_text, round(avg_conf, 2), "Tesseract", "en"
-        except Exception as e:
-            logger.warning(f"Tesseract English OCR fallback failed: {e}")
-
-        return "", 0.0, "None", "en"
-
-    # 2. Automatic Language Detection or Regional Language -> PaddleOCR Multilingual Pipeline
-    paddle_engine = get_paddle_devanagari_engine()
-    if paddle_engine is not None:
-        try:
-            img_np = np.array(image.convert("RGB"))
-            h, w = img_np.shape[:2]
-            pad_h = (32 - (h % 32)) % 32
-            pad_w = (32 - (w % 32)) % 32
-            if pad_h > 0 or pad_w > 0:
-                img_np = np.pad(img_np, ((0, pad_h), (0, pad_w), (0, 0)), mode="edge")
-
-            ocr_res = paddle_engine.ocr(img_np, cls=False)
-
-
-
-            if ocr_res and ocr_res[0]:
-                lines = ocr_res[0]
-                texts = [line[1][0] for line in lines if line[1][0].strip()]
-                scores = [float(line[1][1]) for line in lines if line[1][0].strip()]
-
-                raw_text = "\n".join(texts)
-                avg_confidence = (sum(scores) / len(scores)) if scores else 0.0
-                conf_pct = round(avg_confidence * 100.0, 2)
-
-                # Automatic Language Detection on the OCR extracted text
-                if norm_lang == "auto":
-                    detected_lang, _, _ = detect_language(raw_text)
-                else:
-                    detected_lang = norm_lang
-
-                # Assign descriptive OCR engine name
-                if detected_lang == "mr":
-                    engine_name = "PaddleOCR-Marathi"
-                elif detected_lang == "hi":
-                    engine_name = "PaddleOCR-Hindi"
-                elif detected_lang == "en+mr":
-                    engine_name = "PaddleOCR-Mixed-Marathi"
-                elif detected_lang == "en+hi":
-                    engine_name = "PaddleOCR-Mixed-Hindi"
-                elif detected_lang == "en":
-                    engine_name = "PaddleOCR-English"
-                else:
-                    engine_name = "PaddleOCR-Devanagari"
-
-                return raw_text, conf_pct, engine_name, detected_lang
-            else:
-                return "", 0.0, "PaddleOCR-Devanagari", "en"
-        except Exception as e:
-            logger.exception(f"PaddleOCR extraction failed: {e}")
-
-
-    # Fallback to RapidOCR if PaddleOCR fails
-    rapid_engine = get_rapid_ocr_engine()
-    if rapid_engine is not None:
-        try:
-            img_byte_arr = io.BytesIO()
-            image.convert("RGB").save(img_byte_arr, format="PNG")
-            img_bytes = img_byte_arr.getvalue()
-
-            ocr_res, _ = rapid_engine(img_bytes)
-            if ocr_res:
-                texts = [item[1] for item in ocr_res]
-                scores = [float(item[2]) for item in ocr_res]
-                full_text = "\n".join(texts)
-                avg_confidence = (sum(scores) / len(scores)) if scores else 0.0
-                det_lang, _, _ = detect_language(full_text)
-                return full_text, round(avg_confidence * 100.0, 2), "RapidOCR-Fallback", det_lang
-        except Exception as e:
-            logger.warning(f"RapidOCR fallback failed: {e}")
-
-    return "", 0.0, "None", "en"
+    if os.environ.get("DOC_SENTINEL_SURYA_CHILD") == "1":
+        return _run_surya_on_image(image, language)
+    return _run_surya_subprocess(image, language)
 
 
 def process_image_document(
@@ -466,7 +437,7 @@ def process_pdf_document(
     Process PDF documents:
     - Extracts embedded text directly using PyMuPDF.
     - Performs automatic language detection on extracted digital text.
-    - If a page has minimal or no embedded text (scanned PDF), rasterizes to image and runs PaddleOCR.
+    - If a page has minimal or no embedded text (scanned PDF), rasterizes to image and runs Surya OCR.
     - Aggregates all pages, detected languages, and confidence scores.
     """
     try:
@@ -511,7 +482,7 @@ def process_pdf_document(
                     )
                 )
             else:
-                # Scanned page - rasterize to image and OCR with PaddleOCR
+                # Scanned page - rasterize to image and OCR with Surya
                 ocr_applied_any = True
                 pix = pdf_page.get_pixmap(dpi=200)
                 img = Image.open(io.BytesIO(pix.tobytes("png")))

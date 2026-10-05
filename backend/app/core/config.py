@@ -4,7 +4,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-ENV_FILE = BASE_DIR / ".env"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+_root_env = REPO_ROOT / ".env"
+_backend_env = BASE_DIR / ".env"
+ENV_FILE = _root_env if _root_env.exists() else _backend_env
 
 
 class Settings(BaseSettings):

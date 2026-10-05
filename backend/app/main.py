@@ -58,6 +58,15 @@ def initialize_database() -> None:
     engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
     Base.metadata.create_all(engine)
 
+    try:
+        from app.services.embedding_service import preload_embedding_runtime
+
+        preload_embedding_runtime()
+    except Exception:
+        logging.exception(
+            "Could not preload embedding runtime; semantic search may fail until Torch loads"
+        )
+
     # Ensure schema has all RBAC & categorization columns without dropping existing data
     try:
         from sqlalchemy import text
