@@ -115,6 +115,13 @@ def get_surya_runtime() -> dict[str, Any] | None:
 
     try:
         try:
+            import torch
+
+            torch.set_num_threads(1)
+        except Exception:
+            logger.debug("Could not cap torch threads", exc_info=True)
+
+        try:
             from surya.detection import DetectionPredictor
             from surya.foundation import FoundationPredictor
             from surya.recognition import RecognitionPredictor
@@ -428,6 +435,7 @@ def _ensure_surya_worker() -> subprocess.Popen[str]:
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        start_new_session=True,
     )
     logger.info("Surya worker spawned pid=%s", proc.pid)
     _surya_stderr_tail.clear()
@@ -565,16 +573,30 @@ def _run_surya_subprocess(
         Path(image_path).unlink(missing_ok=True)
 
 
+def _use_inline_surya() -> bool:
+    """Linux/Codespaces: run in-process. Child workers get SIGTERM during Torch load."""
+    flag = (os.environ.get("DOC_SENTINEL_SURYA_INLINE") or "").strip().lower()
+    if flag in {"1", "true", "yes"}:
+        return True
+    if flag in {"0", "false", "no"}:
+        return False
+    return sys.platform != "win32"
+
+
 def _perform_image_ocr(
     image: Image.Image, language: str = "auto"
 ) -> tuple[str, float, str, str]:
     """
     Run Surya OCR on a PIL image, then classify language from the extracted text.
 
-    The API process uses a child Python process so a native Surya/Torch crash
-    does not take down FastAPI.
+    On Windows a child process isolates native Torch crashes. On Linux/Codespaces
+    that child is SIGTERM'd while loading models, so OCR runs in-process unless
+    DOC_SENTINEL_SURYA_INLINE=0.
     """
     if os.environ.get("DOC_SENTINEL_SURYA_CHILD") == "1":
+        return _run_surya_on_image(image, language)
+    if _use_inline_surya():
+        logger.info("Running Surya OCR in-process (platform=%s)", sys.platform)
         return _run_surya_on_image(image, language)
     return _run_surya_subprocess(image, language)
 
