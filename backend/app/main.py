@@ -15,7 +15,9 @@ from app.core.config import settings
 from app.db.base import Base
 import app.models.document
 import app.models.embedding
+import app.models.permission
 import app.models.user
+import app.models.workflow
 from app.services.auth_service import init_default_admin
 
 app = FastAPI(
@@ -31,12 +33,14 @@ cors_origins = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
-if settings.FRONTEND_URL and settings.FRONTEND_URL not in cors_origins:
-    cors_origins.append(settings.FRONTEND_URL)
+frontend_origin = (settings.FRONTEND_URL or "").strip().rstrip("/")
+if frontend_origin and frontend_origin not in cors_origins:
+    cors_origins.append(frontend_origin)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=r"https://.*\.(app\.github\.dev|github\.dev|githubpreview\.dev)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,7 +59,11 @@ def initialize_database() -> None:
 
     from app.services.embedding_service import reindex_pending_documents
 
-    engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    engine = create_engine(
+        settings.sqlalchemy_database_url,
+        pool_pre_ping=True,
+        pool_recycle=300,
+    )
     Base.metadata.create_all(engine)
 
     try:

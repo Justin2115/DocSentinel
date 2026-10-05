@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
@@ -10,8 +11,31 @@ _backend_env = BASE_DIR / ".env"
 ENV_FILE = _root_env if _root_env.exists() else _backend_env
 
 
+def _to_psycopg2_url(dsn: str) -> str:
+    raw = dsn.strip().strip('"').strip("'")
+    if raw.startswith("postgres://"):
+        raw = "postgresql://" + raw[len("postgres://") :]
+    if raw.startswith("postgresql://") and "+psycopg2" not in raw:
+        raw = "postgresql+psycopg2://" + raw[len("postgresql://") :]
+
+    parts = urlsplit(raw)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() != "channel_binding"
+    ]
+    query_keys = {key.lower() for key, _ in query}
+    if "sslmode" not in query_keys:
+        query.append(("sslmode", "require"))
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 class Settings(BaseSettings):
     PORT: int = 5000
+
+    # Neon / any hosted Postgres: full DSN wins over DB_* parts.
+    DATABASE_URL: str | None = None
+    DATABASE_URL_POOLED: str | None = None
 
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
@@ -45,7 +69,10 @@ class Settings(BaseSettings):
     DEFAULT_ADMIN_PASSWORD: str = "admin@098"
 
     @property
-    def DATABASE_URL(self) -> URL:
+    def sqlalchemy_database_url(self) -> str | URL:
+        dsn = (self.DATABASE_URL or self.DATABASE_URL_POOLED or "").strip()
+        if dsn:
+            return _to_psycopg2_url(dsn)
         return URL.create(
             drivername="postgresql+psycopg2",
             username=self.DB_USER,
