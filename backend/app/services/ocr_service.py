@@ -3,11 +3,13 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from html import unescape
 from pathlib import Path
@@ -62,8 +64,40 @@ HINDI_WORDS = {
 _surya_runtime: dict[str, Any] | None | bool = None
 _surya_worker: subprocess.Popen[str] | None = None
 _surya_worker_lock = threading.Lock()
+_surya_stderr_tail: deque[str] = deque(maxlen=120)
 _MAX_OCR_SIDE = 1600
 _WORKER_PAGE_TIMEOUT = 300
+
+
+def _describe_exit(code: int | None) -> str:
+    if code is None:
+        return "still running"
+    if code < 0:
+        sig = -code
+        try:
+            name = signal.Signals(sig).name
+        except ValueError:
+            name = f"signal_{sig}"
+        return f"killed by {name} ({sig})"
+    return f"exit code {code}"
+
+
+def _worker_stderr_dump() -> str:
+    if not _surya_stderr_tail:
+        return "(no stderr captured from worker)"
+    return "\n".join(_surya_stderr_tail)
+
+
+def _log_worker_failure(proc: subprocess.Popen[str] | None, context: str, extra: str = "") -> None:
+    code = proc.poll() if proc is not None else None
+    logger.error(
+        "%s pid=%s status=%s\n--- worker stderr (tail) ---\n%s\n--- end worker stderr ---%s",
+        context,
+        getattr(proc, "pid", None),
+        _describe_exit(code),
+        _worker_stderr_dump(),
+        f"\n{extra}" if extra else "",
+    )
 
 
 def _html_to_text(html: str) -> str:
@@ -95,6 +129,7 @@ def get_surya_runtime() -> dict[str, Any] | None:
             logger.info("Surya OCR ready (v1 FoundationPredictor)")
             return _surya_runtime
         except ImportError:
+            logger.info("Surya v1 import failed, trying v2", exc_info=True)
             from surya.inference import SuryaInferenceManager
             from surya.recognition import RecognitionPredictor
 
@@ -343,13 +378,15 @@ def _run_surya_on_image(
         return raw_text, conf_pct, _engine_label(detected_lang), detected_lang
     except Exception:
         logger.exception("Surya OCR extraction failed")
+        if os.environ.get("DOC_SENTINEL_SURYA_CHILD") == "1":
+            raise
         return "", 0.0, "None", "en"
 
 
 def _worker_env() -> dict[str, str]:
     env = os.environ.copy()
     env["DOC_SENTINEL_SURYA_CHILD"] = "1"
-    env["TQDM_DISABLE"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
     env["TOKENIZERS_PARALLELISM"] = "false"
     env.setdefault("OMP_NUM_THREADS", "1")
     env.setdefault("MKL_NUM_THREADS", "1")
@@ -381,8 +418,9 @@ def _ensure_surya_worker() -> subprocess.Popen[str]:
 
     _stop_surya_worker()
     backend_dir = Path(__file__).resolve().parents[2]
+    logger.info("Starting Surya worker cwd=%s python=%s", backend_dir, sys.executable)
     proc = subprocess.Popen(
-        [sys.executable, "-m", "app.services.surya_worker", "--serve"],
+        [sys.executable, "-u", "-m", "app.services.surya_worker", "--serve"],
         cwd=str(backend_dir),
         env=_worker_env(),
         stdin=subprocess.PIPE,
@@ -391,31 +429,39 @@ def _ensure_surya_worker() -> subprocess.Popen[str]:
         text=True,
         bufsize=1,
     )
+    logger.info("Surya worker spawned pid=%s", proc.pid)
+    _surya_stderr_tail.clear()
 
     def _log_stderr() -> None:
         if proc.stderr is None:
             return
         for line in proc.stderr:
             text = line.rstrip()
-            if text:
-                logger.info("surya worker: %s", text)
+            if not text:
+                continue
+            _surya_stderr_tail.append(text)
+            logger.info("surya worker stderr: %s", text)
 
     threading.Thread(target=_log_stderr, name="surya-worker-stderr", daemon=True).start()
 
     try:
         payload = _read_json_from_worker(proc, timeout=300)
     except Exception:
+        _log_worker_failure(proc, "Surya worker died before it became ready")
         try:
             proc.kill()
         except Exception:
             pass
         raise
     if proc.poll() is not None or not payload.get("ready"):
+        _log_worker_failure(proc, "Surya worker failed to start", extra=f"payload={payload!r}")
         try:
             proc.kill()
         except Exception:
             pass
-        raise RuntimeError(f"Surya worker failed to start: {payload}")
+        raise RuntimeError(
+            f"Surya worker failed to start ({_describe_exit(proc.poll())}): {payload}"
+        )
 
     _surya_worker = proc
     logger.info("Surya OCR worker ready pid=%s", proc.pid)
@@ -445,14 +491,23 @@ def _read_json_from_worker(proc: subprocess.Popen[str], timeout: int) -> dict[st
         raw = _read_worker_line(proc, remaining)
         if not (raw or "").strip():
             if proc.poll() is not None:
-                raise RuntimeError(f"Surya worker exited {proc.returncode}")
+                _log_worker_failure(proc, "Surya worker exited while waiting for JSON")
+                raise RuntimeError(
+                    f"Surya worker {_describe_exit(proc.returncode)}"
+                )
             continue
         try:
             parsed = json.loads(raw.strip())
         except json.JSONDecodeError:
-            logger.info("surya worker stdout: %s", raw.strip()[:500])
+            logger.warning("surya worker non-JSON stdout: %s", raw.strip()[:2000])
             continue
         if isinstance(parsed, dict):
+            if parsed.get("error") or parsed.get("traceback"):
+                logger.error(
+                    "Surya worker JSON error: %s\n%s",
+                    parsed.get("error"),
+                    parsed.get("traceback") or "",
+                )
             return parsed
     raise TimeoutError(f"Surya worker timed out after {timeout}s")
 
@@ -469,15 +524,26 @@ def _run_surya_subprocess(
         with _surya_worker_lock:
             last_error = ""
             for attempt in range(2):
+                proc: subprocess.Popen[str] | None = None
                 try:
                     proc = _ensure_surya_worker()
                     if proc.stdin is None or proc.stdout is None:
                         raise RuntimeError("Surya worker pipes are closed")
+                    logger.info(
+                        "Sending OCR job to worker pid=%s image=%s",
+                        proc.pid,
+                        image_path,
+                    )
                     proc.stdin.write(request + "\n")
                     proc.stdin.flush()
                     payload = _read_json_from_worker(proc, _WORKER_PAGE_TIMEOUT)
-                    if payload.get("error") and not payload.get("engine"):
+                    if payload.get("error"):
                         last_error = str(payload.get("error"))
+                        logger.error(
+                            "Surya worker reported error: %s\n%s",
+                            last_error,
+                            payload.get("traceback") or "",
+                        )
                         continue
                     return (
                         payload.get("text") or "",
@@ -485,9 +551,13 @@ def _run_surya_subprocess(
                         payload.get("engine") or "None",
                         payload.get("language") or "en",
                     )
-                except Exception as exc:
-                    last_error = str(exc)
-                    logger.warning("Surya OCR worker attempt %s failed: %s", attempt + 1, exc)
+                except Exception:
+                    logger.exception("Surya OCR worker attempt %s failed", attempt + 1)
+                    dead = proc if proc is not None else _surya_worker
+                    last_error = _describe_exit(dead.poll() if dead is not None else None)
+                    _log_worker_failure(
+                        dead, f"Surya OCR worker attempt {attempt + 1} failed"
+                    )
                     _stop_surya_worker()
             logger.error("Surya OCR worker failed after retries: %s", last_error)
             return "", 0.0, "None", "en"
