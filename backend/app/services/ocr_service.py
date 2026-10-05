@@ -65,8 +65,9 @@ _surya_runtime: dict[str, Any] | None | bool = None
 _surya_worker: subprocess.Popen[str] | None = None
 _surya_worker_lock = threading.Lock()
 _surya_stderr_tail: deque[str] = deque(maxlen=120)
-_MAX_OCR_SIDE = 1600
+_MAX_OCR_SIDE = 1024
 _WORKER_PAGE_TIMEOUT = 300
+_OCR_STRIP_COUNT = 12
 
 
 def _describe_exit(code: int | None) -> str:
@@ -105,6 +106,36 @@ def _html_to_text(html: str) -> str:
     return unescape(re.sub(r"\s+", " ", text)).strip()
 
 
+def _surya_on_cpu() -> bool:
+    try:
+        import torch
+
+        return not torch.cuda.is_available()
+    except Exception:
+        return True
+
+
+def _skip_surya_detector() -> bool:
+    """CPU detection is one tqdm step and can look frozen for many minutes."""
+    flag = (os.environ.get("DOC_SENTINEL_SURYA_DETECT") or "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return False
+    if flag in {"0", "false", "no", "off", "skip"}:
+        return True
+    return _surya_on_cpu()
+
+
+def _page_strip_bboxes(width: int, height: int, strips: int = _OCR_STRIP_COUNT) -> list[list[int]]:
+    strip_h = max(48, (height + strips - 1) // strips)
+    boxes: list[list[int]] = []
+    y = 0
+    while y < height:
+        y2 = min(height, y + strip_h)
+        boxes.append([0, y, width, y2])
+        y = y2
+    return boxes
+
+
 def get_surya_runtime() -> dict[str, Any] | None:
     """Load Surya once. Prefer v1 (pure Torch) so Windows does not need llama.cpp."""
     global _surya_runtime
@@ -112,6 +143,10 @@ def get_surya_runtime() -> dict[str, Any] | None:
         return None
     if _surya_runtime is not None:
         return _surya_runtime
+
+    os.environ.setdefault("DETECTOR_BATCH_SIZE", "1")
+    os.environ.setdefault("RECOGNITION_BATCH_SIZE", "1")
+    os.environ.setdefault("DETECTOR_POSTPROCESSING_CPU_WORKERS", "1")
 
     try:
         try:
@@ -122,7 +157,6 @@ def get_surya_runtime() -> dict[str, Any] | None:
             logger.debug("Could not cap torch threads", exc_info=True)
 
         try:
-            from surya.detection import DetectionPredictor
             from surya.foundation import FoundationPredictor
             from surya.recognition import RecognitionPredictor
             from surya.settings import settings
@@ -130,10 +164,19 @@ def get_surya_runtime() -> dict[str, Any] | None:
             foundation = FoundationPredictor(
                 checkpoint=settings.RECOGNITION_MODEL_CHECKPOINT
             )
-            det = DetectionPredictor()
             rec = RecognitionPredictor(foundation)
+            skip_det = _skip_surya_detector()
+            det = None
+            if not skip_det:
+                from surya.detection import DetectionPredictor
+
+                det = DetectionPredictor()
             _surya_runtime = {"kind": "v1", "rec": rec, "det": det}
-            logger.info("Surya OCR ready (v1 FoundationPredictor)")
+            logger.info(
+                "Surya OCR ready (v1 FoundationPredictor) detector=%s device_cpu=%s",
+                "on" if det is not None else "skipped",
+                _surya_on_cpu(),
+            )
             return _surya_runtime
         except ImportError:
             logger.info("Surya v1 import failed, trying v2", exc_info=True)
@@ -369,10 +412,35 @@ def _run_surya_on_image(
     try:
         rgb = _prepare_ocr_image(image)
         rec = runtime["rec"]
+        started = time.time()
+        logger.info(
+            "Surya page OCR start size=%sx%s detector=%s",
+            rgb.size[0],
+            rgb.size[1],
+            "on" if runtime.get("det") is not None else "page-strips",
+        )
         if runtime["kind"] == "v1":
-            predictions = rec([rgb], det_predictor=runtime["det"])
+            if runtime.get("det") is not None:
+                logger.info(
+                    "Text detector running: tqdm 0/1 stays at 0%% until the whole page is done"
+                )
+                predictions = rec(
+                    [rgb],
+                    det_predictor=runtime["det"],
+                    detection_batch_size=1,
+                    recognition_batch_size=1,
+                )
+            else:
+                boxes = _page_strip_bboxes(rgb.size[0], rgb.size[1])
+                logger.info("Recognizing %s horizontal strips (CPU skip-detector)", len(boxes))
+                predictions = rec(
+                    [rgb],
+                    bboxes=[boxes],
+                    recognition_batch_size=1,
+                )
         else:
             predictions = rec([rgb])
+        logger.info("Surya page OCR finished in %.1fs", time.time() - started)
 
         if not predictions:
             return "", 0.0, "SuryaOCR", "en"
