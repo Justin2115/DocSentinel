@@ -68,6 +68,7 @@ _surya_stderr_tail: deque[str] = deque(maxlen=120)
 _MAX_OCR_SIDE = 1024
 _WORKER_PAGE_TIMEOUT = 300
 _OCR_STRIP_COUNT = 12
+_OCR_STRIP_MAX_TOKENS = 192
 
 
 def _describe_exit(code: int | None) -> str:
@@ -136,6 +137,63 @@ def _page_strip_bboxes(width: int, height: int, strips: int = _OCR_STRIP_COUNT) 
     return boxes
 
 
+def _strip_is_mostly_blank(image: Image.Image, box: list[int]) -> bool:
+    crop = image.crop((box[0], box[1], box[2], box[3])).convert("L")
+    extrema = crop.getextrema()
+    if extrema is None:
+        return True
+    darkest, lightest = extrema
+    if lightest - darkest < 8:
+        return True
+    hist = crop.histogram()
+    pixels = crop.size[0] * crop.size[1]
+    if pixels <= 0:
+        return True
+    near_white = sum(hist[245:])
+    return (near_white / pixels) > 0.985
+
+
+def _recognize_page_strips(rec: Any, rgb: Image.Image) -> tuple[str, float]:
+    boxes = _page_strip_bboxes(rgb.size[0], rgb.size[1])
+    texts: list[str] = []
+    confs: list[float] = []
+    for index, box in enumerate(boxes, start=1):
+        if _strip_is_mostly_blank(rgb, box):
+            logger.info("Surya strip %s/%s skipped (blank) bbox=%s", index, len(boxes), box)
+            continue
+        started = time.time()
+        logger.info("Surya strip %s/%s start bbox=%s", index, len(boxes), box)
+        predictions = rec(
+            [rgb],
+            bboxes=[[box]],
+            recognition_batch_size=1,
+            max_tokens=_OCR_STRIP_MAX_TOKENS,
+            drop_repeated_text=True,
+        )
+        if not predictions:
+            logger.info(
+                "Surya strip %s/%s done in %.1fs chars=0",
+                index,
+                len(boxes),
+                time.time() - started,
+            )
+            continue
+        text, conf = _prediction_to_text(predictions[0])
+        logger.info(
+            "Surya strip %s/%s done in %.1fs chars=%s",
+            index,
+            len(boxes),
+            time.time() - started,
+            len(text),
+        )
+        if text:
+            texts.append(text)
+            confs.append(conf)
+    combined = "\n".join(texts).strip()
+    avg = round(sum(confs) / len(confs), 2) if confs else 0.0
+    return combined, avg
+
+
 def get_surya_runtime() -> dict[str, Any] | None:
     """Load Surya once. Prefer v1 (pure Torch) so Windows does not need llama.cpp."""
     global _surya_runtime
@@ -147,6 +205,7 @@ def get_surya_runtime() -> dict[str, Any] | None:
     os.environ.setdefault("DETECTOR_BATCH_SIZE", "1")
     os.environ.setdefault("RECOGNITION_BATCH_SIZE", "1")
     os.environ.setdefault("DETECTOR_POSTPROCESSING_CPU_WORKERS", "1")
+    os.environ.setdefault("FOUNDATION_MAX_TOKENS", str(_OCR_STRIP_MAX_TOKENS))
 
     try:
         try:
@@ -429,23 +488,22 @@ def _run_surya_on_image(
                     det_predictor=runtime["det"],
                     detection_batch_size=1,
                     recognition_batch_size=1,
+                    max_tokens=_OCR_STRIP_MAX_TOKENS,
+                    drop_repeated_text=True,
                 )
+                if not predictions:
+                    return "", 0.0, "SuryaOCR", "en"
+                raw_text, conf_pct = _prediction_to_text(predictions[0])
             else:
-                boxes = _page_strip_bboxes(rgb.size[0], rgb.size[1])
-                logger.info("Recognizing %s horizontal strips (CPU skip-detector)", len(boxes))
-                predictions = rec(
-                    [rgb],
-                    bboxes=[boxes],
-                    recognition_batch_size=1,
-                )
+                logger.info("Recognizing horizontal strips (CPU skip-detector)")
+                raw_text, conf_pct = _recognize_page_strips(rec, rgb)
         else:
             predictions = rec([rgb])
+            if not predictions:
+                return "", 0.0, "SuryaOCR", "en"
+            raw_text, conf_pct = _prediction_to_text(predictions[0])
         logger.info("Surya page OCR finished in %.1fs", time.time() - started)
 
-        if not predictions:
-            return "", 0.0, "SuryaOCR", "en"
-
-        raw_text, conf_pct = _prediction_to_text(predictions[0])
         if norm_lang == "auto":
             detected_lang, _, _ = detect_language(raw_text)
         else:
