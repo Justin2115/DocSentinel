@@ -6,6 +6,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
 from html import unescape
 from pathlib import Path
@@ -58,6 +60,10 @@ HINDI_WORDS = {
 
 # Initialize Surya lazily (v1 FoundationPredictor, or v2 InferenceManager)
 _surya_runtime: dict[str, Any] | None | bool = None
+_surya_worker: subprocess.Popen[str] | None = None
+_surya_worker_lock = threading.Lock()
+_MAX_OCR_SIDE = 1600
+_WORKER_PAGE_TIMEOUT = 300
 
 
 def _html_to_text(html: str) -> str:
@@ -296,6 +302,19 @@ def detect_language(text: str) -> tuple[str, float, dict[str, Any]]:
     }
 
 
+def _prepare_ocr_image(image: Image.Image) -> Image.Image:
+    rgb = image.convert("RGB")
+    width, height = rgb.size
+    longest = max(width, height)
+    if longest <= _MAX_OCR_SIDE:
+        return rgb
+    scale = _MAX_OCR_SIDE / float(longest)
+    return rgb.resize(
+        (max(1, int(width * scale)), max(1, int(height * scale))),
+        Image.Resampling.LANCZOS,
+    )
+
+
 def _run_surya_on_image(
     image: Image.Image, language: str = "auto"
 ) -> tuple[str, float, str, str]:
@@ -306,7 +325,7 @@ def _run_surya_on_image(
         return "", 0.0, "None", "en"
 
     try:
-        rgb = image.convert("RGB")
+        rgb = _prepare_ocr_image(image)
         rec = runtime["rec"]
         if runtime["kind"] == "v1":
             predictions = rec([rgb], det_predictor=runtime["det"])
@@ -327,48 +346,151 @@ def _run_surya_on_image(
         return "", 0.0, "None", "en"
 
 
+def _worker_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["DOC_SENTINEL_SURYA_CHILD"] = "1"
+    env["TQDM_DISABLE"] = "1"
+    env["TOKENIZERS_PARALLELISM"] = "false"
+    env.setdefault("OMP_NUM_THREADS", "1")
+    env.setdefault("MKL_NUM_THREADS", "1")
+    env.setdefault("TORCH_NUM_THREADS", "1")
+    return env
+
+
+def _stop_surya_worker() -> None:
+    global _surya_worker
+    proc = _surya_worker
+    _surya_worker = None
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=10)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _ensure_surya_worker() -> subprocess.Popen[str]:
+    global _surya_worker
+    if _surya_worker is not None and _surya_worker.poll() is None:
+        return _surya_worker
+
+    _stop_surya_worker()
+    backend_dir = Path(__file__).resolve().parents[2]
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "app.services.surya_worker", "--serve"],
+        cwd=str(backend_dir),
+        env=_worker_env(),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    def _log_stderr() -> None:
+        if proc.stderr is None:
+            return
+        for line in proc.stderr:
+            text = line.rstrip()
+            if text:
+                logger.info("surya worker: %s", text)
+
+    threading.Thread(target=_log_stderr, name="surya-worker-stderr", daemon=True).start()
+
+    try:
+        payload = _read_json_from_worker(proc, timeout=300)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise
+    if proc.poll() is not None or not payload.get("ready"):
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise RuntimeError(f"Surya worker failed to start: {payload}")
+
+    _surya_worker = proc
+    logger.info("Surya OCR worker ready pid=%s", proc.pid)
+    return proc
+
+
+def _read_worker_line(proc: subprocess.Popen[str], timeout: int) -> str:
+    line_holder: list[str] = []
+
+    def _read() -> None:
+        if proc.stdout is None:
+            return
+        line_holder.append(proc.stdout.readline())
+
+    reader = threading.Thread(target=_read, name="surya-worker-stdout", daemon=True)
+    reader.start()
+    reader.join(timeout=timeout)
+    if reader.is_alive():
+        raise TimeoutError(f"Surya worker timed out after {timeout}s")
+    return line_holder[0] if line_holder else ""
+
+
+def _read_json_from_worker(proc: subprocess.Popen[str], timeout: int) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        remaining = max(1, int(deadline - time.time()))
+        raw = _read_worker_line(proc, remaining)
+        if not (raw or "").strip():
+            if proc.poll() is not None:
+                raise RuntimeError(f"Surya worker exited {proc.returncode}")
+            continue
+        try:
+            parsed = json.loads(raw.strip())
+        except json.JSONDecodeError:
+            logger.info("surya worker stdout: %s", raw.strip()[:500])
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    raise TimeoutError(f"Surya worker timed out after {timeout}s")
+
+
 def _run_surya_subprocess(
     image: Image.Image, language: str = "auto"
 ) -> tuple[str, float, str, str]:
-    backend_dir = Path(__file__).resolve().parents[2]
     handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     image_path = handle.name
     handle.close()
     try:
-        image.convert("RGB").save(image_path, "PNG")
-        env = os.environ.copy()
-        env["DOC_SENTINEL_SURYA_CHILD"] = "1"
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "app.services.surya_worker",
-                image_path,
-                language or "auto",
-            ],
-            cwd=str(backend_dir),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if completed.returncode != 0:
-            logger.error(
-                "Surya OCR worker exited %s: %s",
-                completed.returncode,
-                (completed.stderr or completed.stdout or "")[-2000:],
-            )
+        _prepare_ocr_image(image).save(image_path, "PNG")
+        request = json.dumps({"image": image_path, "language": language or "auto"})
+        with _surya_worker_lock:
+            last_error = ""
+            for attempt in range(2):
+                try:
+                    proc = _ensure_surya_worker()
+                    if proc.stdin is None or proc.stdout is None:
+                        raise RuntimeError("Surya worker pipes are closed")
+                    proc.stdin.write(request + "\n")
+                    proc.stdin.flush()
+                    payload = _read_json_from_worker(proc, _WORKER_PAGE_TIMEOUT)
+                    if payload.get("error") and not payload.get("engine"):
+                        last_error = str(payload.get("error"))
+                        continue
+                    return (
+                        payload.get("text") or "",
+                        float(payload.get("confidence") or 0),
+                        payload.get("engine") or "None",
+                        payload.get("language") or "en",
+                    )
+                except Exception as exc:
+                    last_error = str(exc)
+                    logger.warning("Surya OCR worker attempt %s failed: %s", attempt + 1, exc)
+                    _stop_surya_worker()
+            logger.error("Surya OCR worker failed after retries: %s", last_error)
             return "", 0.0, "None", "en"
-        payload = json.loads(completed.stdout.strip().splitlines()[-1])
-        return (
-            payload.get("text") or "",
-            float(payload.get("confidence") or 0),
-            payload.get("engine") or "None",
-            payload.get("language") or "en",
-        )
-    except Exception:
-        logger.exception("Surya OCR worker failed")
-        return "", 0.0, "None", "en"
     finally:
         Path(image_path).unlink(missing_ok=True)
 
@@ -484,7 +606,7 @@ def process_pdf_document(
             else:
                 # Scanned page - rasterize to image and OCR with Surya
                 ocr_applied_any = True
-                pix = pdf_page.get_pixmap(dpi=200)
+                pix = pdf_page.get_pixmap(dpi=120)
                 img = Image.open(io.BytesIO(pix.tobytes("png")))
                 ocr_text, ocr_conf, ocr_engine, det_lang = _perform_image_ocr(
                     img, language=language
