@@ -9,6 +9,7 @@ logging.basicConfig(level=logging.INFO)
 
 from app.api.auth import admin_router, router as auth_router
 from app.api.documents import router as documents_router
+from app.api.query import router as query_router
 from app.api.search import router as search_router
 
 from app.core.config import settings
@@ -46,6 +47,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(documents_router)
 app.include_router(search_router)
+app.include_router(query_router)
 
 
 
@@ -83,6 +85,19 @@ def initialize_database() -> None:
                     ) THEN
                         ALTER TABLE users ADD CONSTRAINT ck_users_supported_role
                         CHECK (role IN ('ADMIN', 'UPLOAD_MAKER', 'UPLOAD_CHECKER'));
+                    END IF;
+                END $$;
+                ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS folder_name VARCHAR(100);
+                ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS role VARCHAR(50);
+                ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS can_upload BOOLEAN DEFAULT TRUE;
+                ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS can_review BOOLEAN DEFAULT TRUE;
+                ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = 'uq_folder_permission_folder_role'
+                    ) THEN
+                        ALTER TABLE folder_permissions ADD CONSTRAINT uq_folder_permission_folder_role
+                        UNIQUE (folder_name, role);
                     END IF;
                 END $$;
             """))

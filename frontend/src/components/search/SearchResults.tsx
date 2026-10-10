@@ -220,7 +220,7 @@ const SearchResults = ({
 								</strong>
 								{hit.similarity != null && (
 									<span className="similarityBadge">
-										{Math.round(hit.similarity * 100)}% match
+										Score: {hit.similarity.toFixed(2)}
 									</span>
 								)}
 							</div>

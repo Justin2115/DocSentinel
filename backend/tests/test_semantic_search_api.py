@@ -10,14 +10,24 @@ from app.main import app
 from app.models.document import Document, DocumentPage, OCRResult
 from app.models.embedding import EmbeddingIndex
 from app.services.embedding_service import index_document_embeddings
-from tests.helpers import use_test_embeddings
+from tests.helpers import get_test_auth_headers, use_test_embeddings
 
 client = TestClient(app)
 
 
+def test_search_api_requires_authentication():
+    response = client.get("/api/search", params={"q": "invoice"})
+    assert response.status_code == 401
+    assert "Authentication required" in response.text
+
+    semantic_response = client.get("/api/search/semantic", params={"q": "invoice"})
+    assert semantic_response.status_code == 401
+
+
 def test_semantic_search_api_english_and_hindi(tmp_path):
-    use_test_embeddings(tmp_path)
+    use_test_embeddings(tmp_path, multilingual=True)
     db = SessionLocal()
+    headers = get_test_auth_headers(db)
     document = Document(
         original_filename="mixed_language.pdf",
         stored_filename="mixed_language.pdf",
@@ -49,6 +59,7 @@ def test_semantic_search_api_english_and_hindi(tmp_path):
         english = client.get(
             "/api/search/semantic",
             params={"q": "pending invoice payment", "min_score": 0.0},
+            headers=headers,
         )
         assert english.status_code == 200
         english_ids = [item["document_id"] for item in english.json()["items"]]
@@ -57,6 +68,7 @@ def test_semantic_search_api_english_and_hindi(tmp_path):
         hindi = client.get(
             "/api/search/semantic",
             params={"q": "चालान भुगतान", "min_score": 0.0},
+            headers=headers,
         )
         assert hindi.status_code == 200
         hindi_ids = [item["document_id"] for item in hindi.json()["items"]]
@@ -78,6 +90,7 @@ def test_semantic_search_api_english_and_hindi(tmp_path):
 
 def test_keyword_search_api():
     db = SessionLocal()
+    headers = get_test_auth_headers(db)
     document = Document(
         original_filename="receipt.txt",
         stored_filename="receipt.txt",
@@ -97,7 +110,11 @@ def test_keyword_search_api():
         )
         db.commit()
 
-        response = client.get("/api/search", params={"q": "banana"})
+        response = client.get(
+            "/api/search",
+            params={"q": "banana"},
+            headers=headers,
+        )
         assert response.status_code == 200
         payload = response.json()
         assert payload["total"] >= 1
@@ -106,6 +123,7 @@ def test_keyword_search_api():
         hybrid = client.get(
             "/api/search",
             params={"q": "banana", "mode": "hybrid", "min_score": 0.0},
+            headers=headers,
         )
         assert hybrid.status_code == 200
         assert any(

@@ -64,6 +64,9 @@ DOCUMENT_TYPE_RULES: list[tuple[str, str, list[str]]] = [
 ]
 
 
+# Currency symbol & code prefix pattern supporting multiple combinations (e.g. USD $37.50)
+_CURRENCY_PREFIX = r"(?:USD|EUR|GBP|INR|CAD|AUD|Rs\.?|[$€£₹]|\s)*"
+
 # Field extraction regex patterns & confidence weights
 # Formats: (field_name, regex_pattern, base_confidence)
 FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
@@ -71,11 +74,11 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "document_number",
         "patterns": [
-            r"(?i)(?:reference\s*#?|ref\s*no\.?|reference\s*no\.?)\s*[:\-\n]?\s*([A-Z0-9\-\/]{5,30})",
-            r"(?i)(?:invoice\s*(?:number|no\.?|#)|inv\s*#?)\s*[:\-\n]?\s*([A-Z0-9\-\/]{3,30})",
-            r"(?i)(?:application\s*(?:number|no\.?|#)|app\s*#?)\s*[:\-\n]?\s*([A-Z0-9\-\/]{4,30})",
-            r"(?i)(?:id\s*(?:number|no\.?|#)|document\s*no\.?)\s*[:\-\n]?\s*([A-Z0-9\-\/]{4,30})",
-            r"(?i)(?:policy\s*(?:number|no\.?|#)|claim\s*no\.?)\s*[:\-\n]?\s*([A-Z0-9\-\/]{4,30})",
+            r"(?i)(?:reference\s*#?|ref\s*no\.?|reference\s*no\.?)\s*[:\|\-\n]?\s*([A-Z0-9\-\/]{5,30})",
+            r"(?i)(?:invoice\s*(?:number|no\.?|#)|inv\s*#?)\s*[:\|\-\n]?\s*([A-Z0-9\-\/]{3,30})",
+            r"(?i)(?:application\s*(?:number|no\.?|#)|app\s*#?)\s*[:\|\-\n]?\s*([A-Z0-9\-\/]{4,30})",
+            r"(?i)(?:id\s*(?:number|no\.?|#)|document\s*no\.?)\s*[:\|\-\n]?\s*([A-Z0-9\-\/]{4,30})",
+            r"(?i)(?:policy\s*(?:number|no\.?|#)|claim\s*no\.?)\s*[:\|\-\n]?\s*([A-Z0-9\-\/]{4,30})",
         ],
         "base_confidence": 92.0,
     },
@@ -83,34 +86,129 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "date",
         "patterns": [
-            r"(?i)(?:दिनांक|तारीख|date\s*of\s*birth|dob)\s*[:\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
-            r"(?i)(?:invoice\s*date|issue\s*date|billing\s*date|date)\s*[:\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
-            r"(?i)(?:date)\s*[:\-\n]?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})",
-            r"(?i)(?:date)\s*[:\-\n]?\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+            r"(?i)(?:दिनांक|तारीख|date\s*of\s*birth|dob)\s*[:\|\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
+            r"(?i)(?:invoice\s*date|issue\s*date|billing\s*date|date)\s*[:\|\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
+            r"(?i)(?:date)\s*[:\|\-\n]?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})",
+            r"(?i)(?:date)\s*[:\|\-\n]?\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
             r"\b(\d{4}[-\/]\d{2}[-\/]\d{2})\b",
             r"\b(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{4})\b",
         ],
         "base_confidence": 88.0,
     },
+    # Due Date
+    {
+        "field_name": "due_date",
+        "patterns": [
+            r"(?i)(?:due\s*date|payment\s*due)\s*[:\|\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
+            r"(?i)(?:due\s*date|payment\s*due)\s*[:\|\-\n]?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})",
+        ],
+        "base_confidence": 90.0,
+    },
     # Full Name / Person Name
     {
         "field_name": "full_name",
         "patterns": [
-            r"(?i)(?:applicant\s*name|candidate\s*name|full\s*name|name\s*of\s*applicant|patient\s*name|employee\s*name)\s*[:\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
-            r"(?i)(?:नाम|नाव|name)\s*[:\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
-            r"(?i)(?:bill\s*to|sold\s*to|customer\s*name)\s*[:\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
+            r"(?i)(?:applicant\s*name|candidate\s*name|full\s*name|name\s*of\s*applicant|patient\s*name|employee\s*name)\s*[:\|\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
+            r"(?i)(?:नाम|नाव|name)\s*[:\|\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
+            r"(?i)(?:invoiced\s*to|bill\s*to|sold\s*to|customer\s*name)\s*[:\|\-\n]?\s*([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+){1,3})",
         ],
         "base_confidence": 85.0,
     },
-    # Total Amount
+    # Subtotal
+    {
+        "field_name": "subtotal",
+        "patterns": [
+            rf"(?i)(?:sub\s*total|subtotal)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 92.0,
+    },
+    # Credit
+    {
+        "field_name": "credit",
+        "patterns": [
+            rf"(?i)\bcredit\b\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 90.0,
+    },
+    # Discount
+    {
+        "field_name": "discount",
+        "patterns": [
+            rf"(?i)(?:discount|promotional\s*code)[^|\n]*[:\|\-]?\s*{_CURRENCY_PREFIX}([-]?[\d,]+\.\d{{2}})",
+            rf"(?i)(?:discount|coupon)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([-]?[\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 90.0,
+    },
+    # Tax
+    {
+        "field_name": "tax",
+        "patterns": [
+            rf"(?i)(?:tax|vat|gst|sales\s*tax)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 88.0,
+    },
+    # Total Amount (Guarded to prevent misattribution to Credit 0.00 or Subtotal)
     {
         "field_name": "total_amount",
         "patterns": [
-            r"(?i)(?:grand\s*total|total\s*amount|amount\s*due|total\s*payable|net\s*amount|total|एकूण\s*रक्कम|कुल\s*राशि)\s*[:\-\n]?\s*(?:[$€£₹]|USD|EUR|GBP|INR|Rs\.?)?\s*([\d,]+\.\d{2})",
-            r"(?i)(?:[$€£₹]|USD|EUR|GBP|INR|Rs\.?)\s*([\d,]+\.\d{2})\b",
-            r"(?i)(?:total)\s*[:\-\n]?\s*([\d,]+\.?\d*)",
+            rf"(?i)(?:grand\s*total|total\s*amount|total\s*payable|net\s*amount|एकूण\s*रक्कम|कुल\s*राशि)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+            rf"(?i)(?<!sub\s)(?<!description\s)\btotal\b\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+            rf"(?i)(?:amount\s*due)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 92.0,
+    },
+    # Outstanding Balance
+    {
+        "field_name": "outstanding_balance",
+        "patterns": [
+            rf"(?i)(?:outstanding\s*balance|balance\s*due|balance)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 91.0,
+    },
+    # Amount Paid
+    {
+        "field_name": "amount_paid",
+        "patterns": [
+            rf"(?i)(?:amount\s*paid|paid\s*amount)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+            rf"(?i)ch_[A-Za-z0-9]+\s+\d{{2}}/\d{{2}}/\d{{4}}\s+{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 89.0,
+    },
+    # Currency
+    {
+        "field_name": "currency",
+        "patterns": [
+            r"\b(USD|EUR|GBP|INR|CAD|AUD)\b",
+            r"([$€£₹])",
+        ],
+        "base_confidence": 95.0,
+    },
+    # Transaction ID
+    {
+        "field_name": "transaction_id",
+        "patterns": [
+            r"(?i)(?:transaction\s*id|txn\s*id)\s*[:\|\-\n]?\s*([A-Za-z0-9_]{10,40})",
+            r"\b(ch_[A-Za-z0-9]{15,35})\b",
+            r"\b(txn_[A-Za-z0-9]{10,35})\b",
+        ],
+        "base_confidence": 94.0,
+    },
+    # Transaction Date
+    {
+        "field_name": "transaction_date",
+        "patterns": [
+            r"(?i)(?:transaction\s*date|txn\s*date)\s*[:\|\-\n]?\s*(\d{1,2}[-\/\.]\d{1,2}[-\/\.]\d{2,4})",
+            r"(?i)ch_[A-Za-z0-9]+\s+(\d{2}/\d{2}/\d{4})",
         ],
         "base_confidence": 90.0,
+    },
+    # Payment Status
+    {
+        "field_name": "payment_status",
+        "patterns": [
+            r"(?i)(?:payment\s*status|status)\s*[:\|\-\n]?\s*(PAID|UNPAID|REFUNDED|CANCELLED|CANCELED|OVERDUE|PENDING|VOID|DRAFT)\b",
+        ],
+        "base_confidence": 93.0,
     },
     # Email Address
     {
@@ -124,7 +222,7 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "phone",
         "patterns": [
-            r"(?i)(?:phone|mobile|tel|contact|फोन|मोबाईल)\s*[:\-\n]?\s*(\+?\d{1,4}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{2,5}[-.\s]?\d{3,5})",
+            r"(?i)(?:phone|mobile|tel|contact|फोन|मोबाईल)\s*[:\|\-\n]?\s*(\+?\d{1,4}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{2,5}[-.\s]?\d{3,5})",
             r"\b(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
         ],
         "base_confidence": 87.0,
@@ -133,8 +231,9 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "organization",
         "patterns": [
-            r"(?i)(?:company|organization|institution|college\/institute|employer|vendor)\s*[:\-\n]?\s*([A-Za-z0-9\s,\.&]{3,50})",
+            r"(?i)(?:company|organization|institution|college\/institute|employer|vendor)\s*[:\|\-\n]?\s*([A-Za-z0-9\s,\.&]{3,50})",
             r"(?i)(?:tata\s+consultancy\s+services|tcs|infosys|wipro|google|microsoft|amazon|accenture|cognizant)\b",
+            r"^([A-Z][a-zA-Z0-9\s]+(?:LLC|Inc\.?|Corp\.?|Ltd\.?|Business\s+Name))",
         ],
         "base_confidence": 82.0,
     },
@@ -142,11 +241,11 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "address",
         "patterns": [
-            r"(?i)(?:address|billing\s*address|shipping\s*address|permanent\s*address|पत्ता|पता)\s*[:\-\n]?\s*([A-Za-z0-9\u0900-\u097F\s,\.\-#\/]{5,80})",
+            r"(?i)(?:address|billing\s*address|shipping\s*address|permanent\s*address|पत्ता|पता)\s*[:\|\-\n]?\s*([A-Za-z0-9\u0900-\u097F\s,\.\-#\/]{5,80})",
+            r"\b(\d+\s+[A-Za-z0-9\s,\.]+(?:St\.?|Street|Ave\.?|Avenue|Rd\.?|Road|Blvd\.?|Lane)[^,\n]*,[^,\n]+[A-Z]{2}\s+\d{5})\b",
         ],
         "base_confidence": 78.0,
     },
-
 ]
 
 
@@ -309,6 +408,22 @@ def extract_document_report(
     if not all_fields and len(combined_text) > 50:
         requires_review = True
         review_reasons.append("No structured fields could be confidently extracted")
+
+    # Flag conflicting or ambiguous fields for human review (Safeguard 2)
+    page_statuses = set()
+    for p in ocr_result.pages:
+        if getattr(p, "status_stamps", None):
+            page_statuses.update(p.status_stamps)
+    if len(page_statuses) > 1:
+        requires_review = True
+        review_reasons.append(
+            f"Conflicting payment statuses across pages ({', '.join(sorted(page_statuses))})"
+        )
+
+    field_dict = {f.field_name: f.field_value for f in all_fields}
+    if field_dict.get("total_amount") == "0.00" and field_dict.get("subtotal") and field_dict.get("subtotal") != "0.00":
+        requires_review = True
+        review_reasons.append("Potential total amount conflict (Total is 0.00 while subtotal is non-zero)")
 
     # If any extracted field has very low confidence (< 60.0%)
     low_conf_fields = [f.field_name for f in all_fields if f.confidence < 60.0]

@@ -6,20 +6,22 @@ import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
 
-import { searchSemantic } from "../api/search";
-import type { SemanticSearchHit } from "../api/search";
+import { askQuestion } from "../api/query";
+import type { SourceCitation } from "../api/query";
 
 const sampleQuestions = [
-	"What are the key points in my documents?",
-	"Summarize the latest financial report",
-	"Find all invoices from July",
-	"Which documents need review?",
+	"How much does the customer owe?",
+	"When is the payment due?",
+	"What is the invoice number?",
+	"What happens if payment is late?",
 ];
 
 type Message = {
 	type: "user" | "ai";
 	text: string;
-	hits?: SemanticSearchHit[];
+	sources?: SourceCitation[];
+	hasEvidence?: boolean;
+	notes?: string;
 };
 
 const AskQuestion = () => {
@@ -30,7 +32,7 @@ const AskQuestion = () => {
 	const [isSearching, setIsSearching] = useState(false);
 	const processedQuery = useRef<string | null>(null);
 
-	const runSemanticSearch = async (query: string) => {
+	const runAskQuestion = async (query: string) => {
 		setIsSearching(true);
 		setMessages((previous) => [
 			...previous,
@@ -39,16 +41,16 @@ const AskQuestion = () => {
 		setQuestion("");
 
 		try {
-			const response = await searchSemantic(query);
-			const hits = response.data.items;
+			const response = await askQuestion({ question: query });
+			const { answer, sources, has_evidence, notes } = response.data;
 			setMessages((previous) => [
 				...previous,
 				{
 					type: "ai",
-					text: hits.length
-						? `Found ${hits.length} related passage${hits.length === 1 ? "" : "s"} in your documents.`
-						: "No semantic matches. Upload and index documents, or try a different question.",
-					hits,
+					text: answer,
+					sources,
+					hasEvidence: has_evidence,
+					notes,
 				},
 			]);
 		} catch {
@@ -56,7 +58,7 @@ const AskQuestion = () => {
 				...previous,
 				{
 					type: "ai",
-					text: "Semantic search is unavailable right now. Make sure the API is running and documents are indexed.",
+					text: "Question answering is unavailable right now. Make sure the API is running and documents are indexed.",
 				},
 			]);
 		} finally {
@@ -70,7 +72,7 @@ const AskQuestion = () => {
 			return;
 		}
 		processedQuery.current = query;
-		void runSemanticSearch(query);
+		void runAskQuestion(query);
 	}, [searchParams]);
 
 	const handleSend = () => {
@@ -78,7 +80,7 @@ const AskQuestion = () => {
 		if (!trimmedQuestion || isSearching) {
 			return;
 		}
-		void runSemanticSearch(trimmedQuestion);
+		void runAskQuestion(trimmedQuestion);
 	};
 
 	return (
@@ -135,30 +137,39 @@ const AskQuestion = () => {
 										</div>
 									)}
 									<div className="messageColumn">
-										<div className="messageBubble">{message.text}</div>
-										{message.hits && message.hits.length > 0 && (
+										<div className="messageBubble" style={{ whiteSpace: "pre-wrap" }}>
+											{message.text}
+										</div>
+										{message.notes && (
+											<span style={{ fontSize: "0.75rem", color: "#6b7280", marginTop: "4px" }}>
+												{message.notes}
+											</span>
+										)}
+										{message.sources && message.sources.length > 0 && (
 											<div className="sourceCards">
-												{message.hits.map((hit) => (
+												{message.sources.map((source, sIdx) => (
 													<button
-														key={`${hit.document_id}-${hit.page_number}-${hit.chunk_index}`}
+														key={`${source.document_id}-${source.page_number}-${sIdx}`}
 														type="button"
 														className="sourceCard"
 														onClick={() =>
 															navigate(
-																`/library?preview=${hit.document_id}`
+																`/library?preview=${source.document_id}`
 															)
 														}
 													>
 														<div className="sourceCardHeader">
-															<strong>{hit.document_name}</strong>
+															<strong>{source.document_name}</strong>
 															<span className="similarityBadge">
-																{Math.round(hit.similarity * 100)}%
+																Score: {source.similarity.toFixed(2)}
 															</span>
 														</div>
-														<span className="sourceCardMeta">
-															Page {hit.page_number}
-														</span>
-														<p>{hit.snippet}</p>
+														{source.page_number != null && (
+															<span className="sourceCardMeta">
+																Page {source.page_number}
+															</span>
+														)}
+														<p>{source.snippet}</p>
 													</button>
 												))}
 											</div>
@@ -171,7 +182,7 @@ const AskQuestion = () => {
 									<div className="messageAvatar">
 										<AutoAwesomeOutlinedIcon />
 									</div>
-									<div className="messageBubble">Searching documents...</div>
+									<div className="messageBubble">Searching and synthesizing answer from documents...</div>
 								</div>
 							)}
 						</div>
@@ -213,8 +224,7 @@ const AskQuestion = () => {
 						</button>
 					</div>
 					<span className="aiDisclaimer">
-						Results are retrieved passages, not generated answers. Verify
-						important information.
+						Answers are grounded strictly in authorized document passages. Verify important information.
 					</span>
 				</div>
 			</div>

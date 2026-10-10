@@ -408,7 +408,7 @@ def list_documents(
     if search and search.strip():
 
         search_term = f"%{search.strip()}%"
-        semantic_ids = semantic_matching_document_ids(db, search.strip())
+        semantic_ids = semantic_matching_document_ids(db, search.strip(), user=current_user)
         keyword_match = or_(
             Document.original_filename.ilike(search_term),
             OCRResult.extracted_text.ilike(search_term),

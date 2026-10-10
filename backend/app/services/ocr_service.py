@@ -148,6 +148,9 @@ class ExtractedPage:
     width: int | None = None
     height: int | None = None
     page_path: str | None = None
+    status_stamps: list[str] = field(default_factory=list)
+    is_duplicate: bool = False
+    duplicate_of_page: int | None = None
 
 
 @dataclass
@@ -459,12 +462,96 @@ def process_image_document(
         )
 
 
+KNOWN_STATUS_WORDS = {
+    "PAID", "UNPAID", "REFUNDED", "CANCELLED", "CANCELED",
+    "VOID", "OVERDUE", "PENDING", "DRAFT", "COMPLETED", "APPROVED", "REJECTED"
+}
+
+
+def _extract_page_layout_text(pdf_page: Any) -> str:
+    """Extract page text preserving spatial 2D layout and table row structures."""
+    try:
+        blocks = pdf_page.get_text("blocks")
+        if not blocks:
+            return pdf_page.get_text()
+
+        bands: dict[float, list[Any]] = {}
+        for b in blocks:
+            # b: (x0, y0, x1, y1, text, block_no, block_type)
+            if len(b) > 6 and b[6] != 0:
+                continue
+            text = b[4].strip()
+            if not text:
+                continue
+            y_center = (b[1] + b[3]) / 2.0
+            matched_band = None
+            for y in bands:
+                if abs(y - y_center) < 8.0:
+                    matched_band = y
+                    break
+            if matched_band is None:
+                matched_band = y_center
+                bands[matched_band] = []
+            bands[matched_band].append(b)
+
+        sorted_bands = sorted(bands.keys())
+        lines = []
+        for k in sorted_bands:
+            row_blocks = sorted(bands[k], key=lambda b: b[0])
+            if len(row_blocks) > 1:
+                row_str = " | ".join(b[4].strip().replace("\n", " ") for b in row_blocks)
+            else:
+                row_str = row_blocks[0][4].strip()
+            lines.append(row_str)
+
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"Spatial layout extraction failed: {e}")
+        return pdf_page.get_text()
+
+
+def _extract_page_status_stamps(doc: Any, pdf_page: Any) -> list[str]:
+    """Inspect embedded raster images on page to detect status stamps/banners (PAID, UNPAID, etc.)."""
+    stamps: list[str] = []
+    try:
+        rapid_engine = get_rapid_ocr_engine()
+        if not rapid_engine:
+            return stamps
+
+        imgs = pdf_page.get_images()
+        for img in imgs:
+            xref = img[0]
+            base_img = doc.extract_image(xref)
+            img_bytes = base_img.get("image")
+            width = base_img.get("width", 0)
+            height = base_img.get("height", 0)
+            if not img_bytes or width < 25 or height < 15:
+                continue
+
+            res, _ = rapid_engine(img_bytes)
+            if res:
+                for item in res:
+                    ocr_word = item[1].strip().upper()
+                    # Match discrete word tokens to prevent substring overlaps (e.g. 'PAID' in 'UNPAID')
+                    tokens = set(re.findall(r"[A-Z]+", ocr_word))
+                    for kw in KNOWN_STATUS_WORDS:
+                        if kw in tokens:
+                            normalized = "CANCELLED" if kw == "CANCELED" else kw
+                            if normalized not in stamps:
+                                stamps.append(normalized)
+    except Exception as e:
+        logger.warning(f"Image banner OCR failed: {e}")
+    return stamps
+
+
 def process_pdf_document(
     file_path: Path, language: str = "auto"
 ) -> DocumentExtractionResult:
     """
     Process PDF documents:
-    - Extracts embedded text directly using PyMuPDF.
+    - Extracts embedded text directly using PyMuPDF with 2D spatial layout preservation.
+    - OCRs embedded raster image stamps/banners (e.g. PAID, UNPAID, REFUNDED, CANCELLED).
+    - Identifies duplicate/near-duplicate page structures.
     - Performs automatic language detection on extracted digital text.
     - If a page has minimal or no embedded text (scanned PDF), rasterizes to image and runs PaddleOCR.
     - Aggregates all pages, detected languages, and confidence scores.
@@ -478,6 +565,7 @@ def process_pdf_document(
         engines_used: list[str] = []
         page_languages: list[str] = []
         all_confidences: list[float] = []
+        page_base_hashes: dict[str, int] = {}
 
         for page_idx in range(len(doc)):
             page_num = page_idx + 1
@@ -486,9 +574,31 @@ def process_pdf_document(
             width = int(rect.width)
             height = int(rect.height)
 
-            # Direct text extraction
-            direct_text = pdf_page.get_text()
+            # Direct text extraction with 2D layout alignment
+            direct_text = _extract_page_layout_text(pdf_page)
             cleaned_direct = clean_extracted_text(direct_text)
+
+            # OCR embedded stamps/banners
+            stamps = _extract_page_status_stamps(doc, pdf_page)
+            if stamps:
+                ocr_applied_any = True
+                engines_used.append("RapidOCR-Stamps")
+                status_suffix = "Payment Status: " + ", ".join(stamps)
+                if cleaned_direct:
+                    cleaned_direct = f"{cleaned_direct}\n{status_suffix}"
+                else:
+                    cleaned_direct = status_suffix
+
+            # Duplicate page detection based on normalized base text
+            base_text_norm = re.sub(r"[^a-zA-Z0-9]", "", direct_text.lower())
+            is_dup = False
+            dup_of = None
+            if len(base_text_norm) >= 30:
+                if base_text_norm in page_base_hashes:
+                    is_dup = True
+                    dup_of = page_base_hashes[base_text_norm]
+                else:
+                    page_base_hashes[base_text_norm] = page_num
 
             # Check if page has sufficient extractable text (digital PDF) or if it is scanned
             alpha_chars = sum(1 for c in cleaned_direct if c.isalnum())
@@ -508,6 +618,9 @@ def process_pdf_document(
                         detected_language=det_lang,
                         width=width,
                         height=height,
+                        status_stamps=stamps,
+                        is_duplicate=is_dup,
+                        duplicate_of_page=dup_of,
                     )
                 )
             else:
@@ -532,6 +645,9 @@ def process_pdf_document(
                         detected_language=det_lang,
                         width=width,
                         height=height,
+                        status_stamps=stamps,
+                        is_duplicate=is_dup,
+                        duplicate_of_page=dup_of,
                     )
                 )
 
