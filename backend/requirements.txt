@@ -25,5 +25,9 @@ lmdb==2.3.0
 imgaug==0.4.0
 RapidFuzz==3.14.5
 opencv-python==4.10.0.84
+sentence-transformers==3.4.1
+chromadb==0.6.3
+posthog==3.25.0
 setuptools==84.0.0
+
 

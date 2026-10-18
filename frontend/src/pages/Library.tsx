@@ -22,6 +22,7 @@ import { searchDocuments, searchSemantic } from "../api/search";
 import type { DocumentDetail, DocumentRecord } from "../api/document";
 import SearchResults from "../components/search/SearchResults";
 import type { SearchResultHit } from "../components/search/SearchResults";
+import { normalizeSearchQuery } from "../utils/searchQuery";
 
 type DocumentItem = DocumentRecord;
 type SearchMode = "keyword" | "semantic";
@@ -75,9 +76,17 @@ const ocrPageLabel = (
 
 const Library = () => {
 	const [searchParams, setSearchParams] = useSearchParams();
-	const [search, setSearch] = useState(searchParams.get("q") || "");
-	const [debouncedSearch, setDebouncedSearch] = useState(search.trim());
-	const [searchMode, setSearchMode] = useState<SearchMode>("keyword");
+	const [search, setSearch] = useState(
+		normalizeSearchQuery(searchParams.get("q") || "")
+	);
+	const [debouncedSearch, setDebouncedSearch] = useState(
+		normalizeSearchQuery(search)
+	);
+	const [isComposing, setIsComposing] = useState(false);
+	const [searchMode, setSearchMode] = useState<SearchMode>(() => {
+		const saved = sessionStorage.getItem("librarySearchMode");
+		return saved === "semantic" ? "semantic" : "keyword";
+	});
 	const [typeFilter, setTypeFilter] = useState("All types");
 	const [statusFilter, setStatusFilter] = useState("All status");
 	const [departmentFilter, setDepartmentFilter] = useState("All departments");
@@ -103,11 +112,14 @@ const Library = () => {
 	const showingSearch = debouncedSearch.length > 0;
 
 	useEffect(() => {
+		if (isComposing) {
+			return;
+		}
 		const timer = window.setTimeout(() => {
-			setDebouncedSearch(search.trim());
+			setDebouncedSearch(normalizeSearchQuery(search));
 		}, 300);
 		return () => window.clearTimeout(timer);
-	}, [search]);
+	}, [search, isComposing]);
 
 	useEffect(() => {
 		const query = searchParams.get("q");
@@ -346,14 +358,20 @@ const Library = () => {
 	};
 
 	const updateSearch = (value: string) => {
-		setSearch(value);
+		const normalized = normalizeSearchQuery(value);
+		setSearch(normalized);
 		const next = new URLSearchParams(searchParams);
-		if (value.trim()) {
-			next.set("q", value.trim());
+		if (normalized) {
+			next.set("q", normalized);
 		} else {
 			next.delete("q");
 		}
 		setSearchParams(next, { replace: true });
+	};
+
+	const setSearchModeAndPersist = (mode: SearchMode) => {
+		setSearchMode(mode);
+		sessionStorage.setItem("librarySearchMode", mode);
 	};
 
 	return (
@@ -375,14 +393,14 @@ const Library = () => {
 						<button
 							type="button"
 							className={searchMode === "keyword" ? "active" : ""}
-							onClick={() => setSearchMode("keyword")}
+							onClick={() => setSearchModeAndPersist("keyword")}
 						>
 							Keyword
 						</button>
 						<button
 							type="button"
 							className={searchMode === "semantic" ? "active" : ""}
-							onClick={() => setSearchMode("semantic")}
+							onClick={() => setSearchModeAndPersist("semantic")}
 						>
 							Semantic
 						</button>
@@ -391,13 +409,22 @@ const Library = () => {
 						<SearchIcon />
 						<input
 							type="text"
+							lang="hi"
 							placeholder={
 								searchMode === "semantic"
-									? "Search by meaning..."
+									? "Search by meaning (English / मराठी / हिंदी)..."
 									: "Search documents..."
 							}
 							value={search}
 							onChange={(event) => updateSearch(event.target.value)}
+							onCompositionStart={() => setIsComposing(true)}
+							onCompositionEnd={(event) => {
+								setIsComposing(false);
+								updateSearch(event.currentTarget.value);
+								setDebouncedSearch(
+									normalizeSearchQuery(event.currentTarget.value)
+								);
+							}}
 						/>
 					</div>
 				</div>

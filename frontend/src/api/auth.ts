@@ -40,7 +40,16 @@ export async function getGoogleAuthUrl(): Promise<string> {
  * Log in using admin credentials
  */
 export async function adminLogin(payload: AdminLoginPayload): Promise<TokenResponse> {
-	const response = await apiClient.post<TokenResponse>("/auth/admin/login", payload);
+	const response = await apiClient.post<TokenResponse>(
+		"/auth/admin/login",
+		{
+			email: payload.email.trim(),
+			password: payload.password,
+		},
+		{
+			headers: { "Content-Type": "application/json" },
+		}
+	);
 	return response.data;
 }
 

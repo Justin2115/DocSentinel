@@ -17,6 +17,7 @@ import Button from "../components/common/Button";
 import Input from "../components/common/Input";
 import { adminLogin, getGoogleAuthUrl } from "../api/auth";
 import { useAuth } from "../context/AuthContext";
+import { formatApiError } from "../utils/apiError";
 
 const GoogleIcon = () => (
 	<svg width="20" height="20" viewBox="0 0 24 24" style={{ marginRight: 10 }}>
@@ -81,9 +82,16 @@ const Login = () => {
 		}
 	};
 
-	const handleAdminLogin = async (e: React.FormEvent) => {
+	const handleAdminLogin = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
-		if (!email.trim() || !password) {
+		const form = e.currentTarget;
+		const formData = new FormData(form);
+		const emailValue = (
+			email.trim() || String(formData.get("email") || "")
+		).trim();
+		const passwordValue = password || String(formData.get("password") || "");
+
+		if (!emailValue || !passwordValue) {
 			setErrorMessage("Please enter both email and password.");
 			return;
 		}
@@ -92,17 +100,20 @@ const Login = () => {
 			setLoading(true);
 			setErrorMessage(null);
 			const data = await adminLogin({
-				email: email.trim(),
-				password,
+				email: emailValue,
+				password: passwordValue,
 			});
 
 			await login(data.access_token, data.user);
 			navigate("/dashboard", { replace: true });
-		} catch (err: any) {
+		} catch (err: unknown) {
 			console.error("Admin login error:", err);
-			const detail =
-				err.response?.data?.detail || "Invalid credentials. Please verify and try again.";
-			setErrorMessage(detail);
+			setErrorMessage(
+				formatApiError(
+					err,
+					"Invalid credentials. Please verify and try again."
+				)
+			);
 		} finally {
 			setLoading(false);
 		}
@@ -240,20 +251,23 @@ const Login = () => {
 						</Box>
 
 						{/* Admin Login Form */}
-						<form onSubmit={handleAdminLogin}>
+						<form onSubmit={handleAdminLogin} autoComplete="on">
 							<Input
 								label="Admin Email"
-								type="email"
+								name="email"
+								type="text"
+								inputMode="email"
 								value={email}
 								onChange={(e) => setEmail(e.target.value)}
 								required
-								autoComplete="email"
+								autoComplete="username"
 								placeholder="admin@docsentinel.local"
 								disabled={loading}
 							/>
 
 							<Input
 								label="Password"
+								name="password"
 								type={showPassword ? "text" : "password"}
 								value={password}
 								onChange={(e) => setPassword(e.target.value)}

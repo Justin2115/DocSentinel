@@ -2,11 +2,16 @@ import axios from "axios";
 
 export const isRequestCanceled = (error: unknown) => axios.isCancel(error);
 
-const apiBase = (
+const configuredBase = (
 	import.meta.env.VITE_API_BASE_URL as string | undefined
-)?.replace(/\/$/, "") || "http://127.0.0.1:8000";
+)?.replace(/\/$/, "");
 
-export const API_BASE_URL = apiBase;
+// In dev, use Vite proxy (vite.config.ts) unless VITE_API_BASE_URL is set explicitly.
+const apiBase =
+	configuredBase || (import.meta.env.DEV ? "" : "http://127.0.0.1:8000");
+
+export const API_BASE_URL =
+	apiBase || (import.meta.env.DEV ? `${window.location.origin} (proxied to :8000)` : "");
 
 export const apiClient = axios.create({
 	baseURL: `${apiBase}/api`,

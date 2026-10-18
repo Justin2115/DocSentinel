@@ -1,4 +1,5 @@
 import apiClient from "./client";
+import { hasDevanagari, normalizeSearchQuery } from "../utils/searchQuery";
 
 export interface SearchHit {
 	document_id: number;
@@ -53,12 +54,19 @@ export const searchSemantic = (
 	topK = 10,
 	minScore = 0.2,
 	signal?: AbortSignal
-) =>
-	apiClient.get<SemanticSearchResponse>("/search/semantic", {
+) => {
+	const query = normalizeSearchQuery(q);
+	const effectiveMinScore =
+		minScore > 0 && hasDevanagari(query)
+			? Math.min(minScore, 0.15)
+			: minScore;
+
+	return apiClient.get<SemanticSearchResponse>("/search/semantic", {
 		params: {
-			q,
+			q: query,
 			top_k: topK,
-			min_score: minScore,
+			min_score: effectiveMinScore,
 		},
 		signal,
 	});
+};

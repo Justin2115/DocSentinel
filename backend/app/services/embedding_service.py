@@ -1,5 +1,7 @@
 import logging
 import re
+import threading
+import unicodedata
 from pathlib import Path
 from typing import Callable
 
@@ -17,6 +19,7 @@ COLLECTION_NAME = "doc_sentinel_chunks"
 EncodeFn = Callable[[list[str]], list[list[float]]]
 
 _model = None
+_model_lock = threading.Lock()
 _encode_override: EncodeFn | None = None
 _chroma_client = None
 _collection = None
@@ -71,24 +74,108 @@ def persist_dir() -> str:
     return str(path)
 
 
+def _repair_legacy_chroma_sqlite_config(persist_path: str) -> None:
+    """Upgrade pre-0.6 Chroma stores that used an empty collection config."""
+    import json
+    import sqlite3
+
+    from chromadb.api.configuration import (
+        CollectionConfigurationInternal,
+        ConfigurationParameter,
+        HNSWConfigurationInternal,
+    )
+
+    sqlite_path = Path(persist_path) / "chroma.sqlite3"
+    if not sqlite_path.is_file():
+        return
+
+    con = sqlite3.connect(sqlite_path)
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT id, config_json_str FROM collections")
+        rows = cur.fetchall()
+        for collection_id, config_json_str in rows:
+            needs_repair = False
+            space = "cosine"
+            if not config_json_str or config_json_str.strip() in ("", "{}"):
+                needs_repair = True
+            else:
+                try:
+                    parsed = json.loads(config_json_str)
+                except json.JSONDecodeError:
+                    needs_repair = True
+                else:
+                    needs_repair = "_type" not in parsed
+                    hnsw_cfg = parsed.get("hnsw_configuration")
+                    if isinstance(hnsw_cfg, dict) and hnsw_cfg.get("_type") in (
+                        "HNSWConfigurationInterface",
+                        None,
+                    ):
+                        needs_repair = True
+
+            if not needs_repair:
+                continue
+
+            cur.execute(
+                "SELECT str_value FROM collection_metadata "
+                "WHERE collection_id = ? AND key = 'hnsw:space'",
+                (collection_id,),
+            )
+            meta_row = cur.fetchone()
+            if meta_row and meta_row[0]:
+                space = meta_row[0]
+
+            hnsw = HNSWConfigurationInternal(
+                parameters=[ConfigurationParameter(name="space", value=space)]
+            )
+            config = CollectionConfigurationInternal(
+                parameters=[
+                    ConfigurationParameter(name="hnsw_configuration", value=hnsw)
+                ]
+            )
+            cur.execute(
+                "UPDATE collections SET config_json_str = ? WHERE id = ?",
+                (config.to_json_str(), collection_id),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _load_sentence_transformer():
+    from sentence_transformers import SentenceTransformer
+
+    logger.info("Loading embedding model %s", settings.EMBEDDING_MODEL)
+    try:
+        return SentenceTransformer(
+            settings.EMBEDDING_MODEL,
+            local_files_only=True,
+            device="cpu",
+        )
+    except Exception:
+        logger.info(
+            "Embedding model not in local cache; downloading %s",
+            settings.EMBEDDING_MODEL,
+        )
+        return SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
+
+
 def _get_model():
     global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-
-        logger.info("Loading embedding model %s", settings.EMBEDDING_MODEL)
-        try:
-            _model = SentenceTransformer(
-                settings.EMBEDDING_MODEL,
-                local_files_only=True,
-            )
-        except Exception:
-            logger.info(
-                "Embedding model not in local cache; downloading %s",
-                settings.EMBEDDING_MODEL,
-            )
-            _model = SentenceTransformer(settings.EMBEDDING_MODEL)
+    if _model is not None:
+        return _model
+    with _model_lock:
+        if _model is None:
+            _model = _load_sentence_transformer()
     return _model
+
+
+def warmup_embedding_model() -> None:
+    """Load the embedding model once before background indexing or API traffic."""
+    try:
+        _get_model()
+    except Exception:
+        logger.exception("Embedding model warmup failed")
 
 
 def schedule_document_indexing(document_id: int) -> None:
@@ -165,6 +252,19 @@ def reindex_pending_documents() -> int:
     return indexed
 
 
+def normalize_search_query(query: str) -> str:
+    return unicodedata.normalize("NFC", (query or "").strip())
+
+
+def chroma_distance_to_similarity(distance: float) -> float:
+    """Map Chroma cosine-space distance to similarity in [0, 1].
+
+    For normalized embeddings Chroma returns squared Euclidean distance:
+    ||a - b||^2 = 2 * (1 - cos_sim).
+    """
+    return max(0.0, min(1.0, 1.0 - float(distance) / 2.0))
+
+
 def encode_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
@@ -179,8 +279,13 @@ def get_collection():
     path = persist_dir()
     if _collection is None or _collection_path != path:
         import chromadb
+        from chromadb.config import Settings
 
-        _chroma_client = chromadb.PersistentClient(path=path)
+        _repair_legacy_chroma_sqlite_config(path)
+        _chroma_client = chromadb.PersistentClient(
+            path=path,
+            settings=Settings(anonymized_telemetry=False),
+        )
         _collection = _chroma_client.get_or_create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},
@@ -281,9 +386,12 @@ def semantic_search(
     top_k: int | None = None,
     min_score: float = 0.2,
 ) -> SemanticSearchResponse:
-    term = (query or "").strip()
+    term = normalize_search_query(query)
     if not term:
         return SemanticSearchResponse(items=[], total=0, query=term)
+
+    if re.search(r"[\u0900-\u097F]", term) and min_score > 0.15:
+        min_score = min(min_score, 0.15)
 
     n_results = top_k or settings.SEMANTIC_TOP_K
     collection = get_collection()
@@ -307,7 +415,7 @@ def semantic_search(
 
     hits: list[SemanticSearchHit] = []
     for snippet, metadata, distance in zip(documents_out, metadatas, distances):
-        similarity = max(0.0, min(1.0, 1.0 - float(distance)))
+        similarity = chroma_distance_to_similarity(distance)
         if similarity < min_score:
             continue
         meta = metadata or {}
@@ -372,7 +480,8 @@ def _content_tokens(text: str) -> list[str]:
     for match in _TOKEN_RE.finditer(text or ""):
         token = match.group(0)
         key = token.lower()
-        if len(key) < 4 or key in _STOPWORDS or key in seen or key.isdigit():
+        min_len = 2 if re.search(r"[\u0900-\u097F]", token) else 4
+        if len(key) < min_len or key in _STOPWORDS or key in seen or key.isdigit():
             continue
         seen.add(key)
         tokens.append(token)

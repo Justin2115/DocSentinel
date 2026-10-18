@@ -3,12 +3,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.embedding_service import chunk_text, semantic_search
+from app.services.embedding_service import (
+    chroma_distance_to_similarity,
+    chunk_text,
+    semantic_search,
+)
 from app.db.session import SessionLocal
 from app.models.document import Document, DocumentPage, OCRResult
 from app.models.embedding import EmbeddingIndex
 from app.services.embedding_service import index_document_embeddings
 from tests.helpers import dummy_encode, use_test_embeddings
+
+
+def test_chroma_distance_to_similarity_uses_squared_l2():
+    assert chroma_distance_to_similarity(0.0) == 1.0
+    assert chroma_distance_to_similarity(2.0) == 0.0
+    assert abs(chroma_distance_to_similarity(1.1573513844227687) - 0.4213) < 0.001
 
 
 def test_chunk_text_splits_with_overlap():

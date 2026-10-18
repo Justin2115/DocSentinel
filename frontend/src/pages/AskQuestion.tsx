@@ -8,6 +8,8 @@ import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
 
 import { searchSemantic } from "../api/search";
 import type { SemanticSearchHit } from "../api/search";
+import { useImeAwareInput } from "../hooks/useImeAwareInput";
+import { normalizeSearchQuery } from "../utils/searchQuery";
 
 const sampleQuestions = [
 	"What are the key points in my documents?",
@@ -25,7 +27,12 @@ type Message = {
 const AskQuestion = () => {
 	const [searchParams] = useSearchParams();
 	const navigate = useNavigate();
-	const [question, setQuestion] = useState("");
+	const {
+		value: question,
+		setValue: setQuestion,
+		isComposing,
+		bindInput,
+	} = useImeAwareInput();
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isSearching, setIsSearching] = useState(false);
 	const processedQuery = useRef<string | null>(null);
@@ -65,7 +72,7 @@ const AskQuestion = () => {
 	};
 
 	useEffect(() => {
-		const query = searchParams.get("q");
+		const query = normalizeSearchQuery(searchParams.get("q") || "");
 		if (!query || processedQuery.current === query) {
 			return;
 		}
@@ -74,7 +81,10 @@ const AskQuestion = () => {
 	}, [searchParams]);
 
 	const handleSend = () => {
-		const trimmedQuestion = question.trim();
+		if (isComposing) {
+			return;
+		}
+		const trimmedQuestion = normalizeSearchQuery(question);
 		if (!trimmedQuestion || isSearching) {
 			return;
 		}
@@ -193,10 +203,10 @@ const AskQuestion = () => {
 						</button>
 						<input
 							type="text"
-							value={question}
-							onChange={(event) => setQuestion(event.target.value)}
+							lang="hi"
+							{...bindInput}
 							onKeyDown={(event) => {
-								if (event.key === "Enter") {
+								if (event.key === "Enter" && !isComposing) {
 									handleSend();
 								}
 							}}

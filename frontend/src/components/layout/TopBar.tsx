@@ -7,11 +7,18 @@ import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { useImeAwareInput } from "../../hooks/useImeAwareInput";
+import { normalizeSearchQuery } from "../../utils/searchQuery";
 
 export default function TopBar() {
   const [open, setOpen] = useState(false);
   const { user, isAdmin, logout: authLogout } = useAuth();
-  const [searchQuery, setSearchQuery] = useState("");
+  const {
+    value: searchQuery,
+    setValue: setSearchQuery,
+    isComposing,
+    bindInput,
+  } = useImeAwareInput();
   const [failedProfilePicture, setFailedProfilePicture] = useState<string | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -61,7 +68,11 @@ export default function TopBar() {
   };
 
   const handleSearch = () => {
-    const trimmedQuery = searchQuery.trim();
+    if (isComposing) {
+      return;
+    }
+
+    const trimmedQuery = normalizeSearchQuery(searchQuery);
 
     if (!trimmedQuery) {
       navigate("/ask");
@@ -79,10 +90,10 @@ export default function TopBar() {
 
         <input
           type="text"
-          value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
+          lang="hi"
+          {...bindInput}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            if (event.key === "Enter" && !isComposing) {
               handleSearch();
             }
           }}

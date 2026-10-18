@@ -53,7 +53,12 @@ app.include_router(search_router)
 def initialize_database() -> None:
     import threading
 
-    from app.services.embedding_service import reindex_pending_documents
+    from app.services.embedding_service import (
+        reindex_pending_documents,
+        warmup_embedding_model,
+    )
+
+    warmup_embedding_model()
 
     engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
     Base.metadata.create_all(engine)
