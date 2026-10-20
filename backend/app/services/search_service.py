@@ -91,9 +91,14 @@ def make_snippet(
     line_start, line_end = _line_bounds(source, index, match_end)
     window = source[line_start:line_end].strip()
 
-    if len(window) > radius * 3:
-        start = max(0, index - radius)
-        end = min(len(source), match_end + radius)
+    if len(window) > radius:
+        context = max(radius // 2, 1)
+        start = max(line_start, index - context)
+        end = min(line_end, max(match_end + context, start + radius))
+        if end - start > radius:
+            end = start + radius
+            if end < match_end:
+                start = max(line_start, match_end - radius)
         window = source[start:end].strip()
         prefix = "…" if start > 0 else ""
         suffix = "…" if end < len(source) else ""
@@ -116,20 +121,22 @@ def keyword_search(
     query: str,
     skip: int = 0,
     limit: int = 20,
+    authorized_ids: list[int] | None = None,
 ) -> SearchResponse:
     term = (query or "").strip()
     if not term:
+        return SearchResponse(items=[], total=0, skip=skip, limit=limit)
+    if authorized_ids is not None and not authorized_ids:
         return SearchResponse(items=[], total=0, skip=skip, limit=limit)
 
     pattern = f"%{term}%"
     hits: list[SearchHit] = []
     seen: set[tuple] = set()
 
-    filename_docs = (
-        db.query(Document)
-        .filter(Document.original_filename.ilike(pattern))
-        .all()
-    )
+    filename_query = db.query(Document).filter(Document.original_filename.ilike(pattern))
+    if authorized_ids is not None:
+        filename_query = filename_query.filter(Document.id.in_(authorized_ids))
+    filename_docs = filename_query.all()
     for document in filename_docs:
         key = (document.id, None, "filename")
         if key in seen:
@@ -146,13 +153,15 @@ def keyword_search(
             )
         )
 
-    ocr_rows = (
+    ocr_query = (
         db.query(OCRResult, Document, DocumentPage)
         .join(Document, Document.id == OCRResult.document_id)
         .outerjoin(DocumentPage, DocumentPage.id == OCRResult.page_id)
         .filter(OCRResult.extracted_text.ilike(pattern))
-        .all()
     )
+    if authorized_ids is not None:
+        ocr_query = ocr_query.filter(Document.id.in_(authorized_ids))
+    ocr_rows = ocr_query.all()
     for ocr, document, page in ocr_rows:
         page_number = page.page_number if page is not None else None
         key = (document.id, page_number, "extracted_text")
@@ -170,7 +179,7 @@ def keyword_search(
             )
         )
 
-    field_rows = (
+    field_query = (
         db.query(ExtractedField, Document, DocumentPage)
         .join(Document, Document.id == ExtractedField.document_id)
         .outerjoin(DocumentPage, DocumentPage.id == ExtractedField.page_id)
@@ -182,8 +191,10 @@ def keyword_search(
                 ExtractedField.corrected_value.ilike(pattern),
             )
         )
-        .all()
     )
+    if authorized_ids is not None:
+        field_query = field_query.filter(Document.id.in_(authorized_ids))
+    field_rows = field_query.all()
     for field, document, page in field_rows:
         value = (
             field.corrected_value
@@ -236,14 +247,23 @@ def hybrid_search(
     skip: int = 0,
     limit: int = 20,
     min_score: float = 0.2,
+    authorized_ids: list[int] | None = None,
 ) -> SearchResponse:
-    """Keyword matches first, then semantic matches that keyword search missed."""
-    keyword_result = keyword_search(db, query, skip=0, limit=10_000)
-    merged: list[SearchHit] = list(keyword_result.items)
-    seen: set[tuple] = {
-        (hit.document_id, hit.page_number, hit.match_field)
-        for hit in merged
-    }
+    """Fuse independent lexical and vector rankings with reciprocal rank fusion."""
+    candidate_limit = min(max(limit * 5, 30), 200)
+    keyword_result = keyword_search(
+        db, query, skip=0, limit=candidate_limit, authorized_ids=authorized_ids
+    )
+    fused: dict[tuple[int, int | None, str], dict[str, object]] = {}
+
+    def add(hit: SearchHit, rank: int, source: str) -> None:
+        key = (hit.document_id, hit.page_number, " ".join((hit.snippet or "").lower().split()))
+        entry = fused.setdefault(key, {"hit": hit, "rrf": 0.0, "sources": set()})
+        entry["rrf"] = float(entry["rrf"]) + 1.0 / (60 + rank)
+        entry["sources"].add(source)
+
+    for rank, hit in enumerate(keyword_result.items, start=1):
+        add(hit, rank, "lexical")
 
     try:
         from app.services.embedding_service import semantic_search
@@ -251,8 +271,9 @@ def hybrid_search(
         semantic_result = semantic_search(
             db,
             query,
-            top_k=max(limit * 2, 10),
+            top_k=candidate_limit,
             min_score=min_score,
+            authorized_ids=authorized_ids,
         )
     except Exception:
         logger.exception(
@@ -261,35 +282,32 @@ def hybrid_search(
         semantic_result = None
 
     if semantic_result is not None:
-        for hit in semantic_result.items:
-            already_on_page = any(
-                existing.document_id == hit.document_id
-                and existing.page_number == hit.page_number
-                and existing.match_field != "semantic"
-                for existing in merged
-            )
-            key = (hit.document_id, hit.page_number, "semantic")
-            if already_on_page or key in seen:
-                continue
-            seen.add(key)
-            merged.append(
+        for rank, hit in enumerate(semantic_result.items, start=1):
+            add(
                 SearchHit(
                     document_id=hit.document_id,
                     document_name=hit.document_name,
                     page_number=hit.page_number,
+                    chunk_index=hit.chunk_index,
                     snippet=hit.snippet,
                     match_field="semantic",
-                    score=hit.similarity,
+                    score=None,
                     highlight_terms=hit.highlight_terms,
-                )
+                ),
+                rank,
+                "semantic",
             )
 
-    merged.sort(
-        key=lambda hit: (
-            0 if hit.match_field != "semantic" else 1,
-            -(hit.score or 0),
-        )
-    )
+    max_rrf = 2 / 61
+    merged: list[SearchHit] = []
+    for entry in fused.values():
+        hit = entry["hit"]
+        sources = entry["sources"]
+        if sources == {"lexical", "semantic"}:
+            hit.match_field = "hybrid"
+        hit.score = round(float(entry["rrf"]) / max_rrf, 4)
+        merged.append(hit)
+    merged.sort(key=lambda hit: hit.score or 0, reverse=True)
     total = len(merged)
     return SearchResponse(
         items=merged[skip : skip + limit],

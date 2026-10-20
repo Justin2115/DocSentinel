@@ -48,8 +48,9 @@ const displayType = (document: DocumentItem): DisplayType => {
 
 const displayStatus = (
 	status: string | null
-): "Processed" | "Needs review" | "Indexed" | "Failed" => {
+): "Processed" | "Needs review" | "Completed with warnings" | "Indexed" | "Failed" => {
 	if (status === "needs_review") return "Needs review";
+	if (status === "completed_with_warnings") return "Completed with warnings";
 	if (status === "indexed") return "Indexed";
 	if (status === "failed") return "Failed";
 	return "Processed";
@@ -120,6 +121,18 @@ const Library = () => {
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
+
+	useEffect(() => {
+		const pageNumber = searchParams.get("page");
+		if (!selectedDocument || !pageNumber) return;
+		const timer = window.setTimeout(() => {
+			document.getElementById(`ocr-page-${pageNumber}`)?.scrollIntoView({
+				behavior: "smooth",
+				block: "center",
+			});
+		}, 50);
+		return () => window.clearTimeout(timer);
+	}, [selectedDocument, searchParams]);
 
 	useEffect(() => {
 		if (!selectedDocument) {
@@ -686,7 +699,11 @@ const Library = () => {
 										<div className="previewOCR">
 											<h4>OCR Content</h4>
 											{selectedDocument.ocr_results.map((ocr) => (
-												<div className="ocrResult" key={ocr.id}>
+								<div
+									className="ocrResult"
+									key={ocr.id}
+									id={`ocr-page-${selectedDocument.pages.find((item) => item.id === ocr.page_id)?.page_number ?? "document"}`}
+								>
 													<div className="ocrResultHeader">
 														<span>
 															{ocrPageLabel(

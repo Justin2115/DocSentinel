@@ -4,6 +4,7 @@ export interface SearchHit {
 	document_id: number;
 	document_name: string;
 	page_number: number | null;
+	chunk_index: number | null;
 	snippet: string;
 	match_field: string;
 	score: number | null;
@@ -31,6 +32,24 @@ export interface SearchResponse {
 export interface SemanticSearchResponse {
 	items: SemanticSearchHit[];
 	total: number;
+	query: string;
+}
+
+export interface AnswerCitation {
+	source_id: string;
+	document_id: number;
+	document_title: string;
+	filename: string;
+	page_number: number | null;
+	excerpt: string;
+	chunk_index: number | null;
+	href: string;
+}
+
+export interface AnswerResponse {
+	answer: string;
+	citations: AnswerCitation[];
+	evidence_status: "answered" | "insufficient_evidence" | "retrieved_only";
 	query: string;
 }
 
@@ -62,3 +81,15 @@ export const searchSemantic = (
 		},
 		signal,
 	});
+
+export const askDocuments = (
+	question: string,
+	includeCitations = true,
+	topK = 8,
+	signal?: AbortSignal
+) =>
+	apiClient.post<AnswerResponse>(
+		"/search/ask",
+		{ question, include_citations: includeCitations, top_k: topK },
+		{ signal }
+	);

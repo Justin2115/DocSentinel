@@ -4,8 +4,14 @@ import StatusBadge from "./StatusBadge";
 import { getDashboardStats } from "../../api/document";
 
 const formatDate = (date: string | null) => date ? new Date(date).toLocaleDateString() : "--";
-const displayStatus = (status: string | null): "Processed" | "Needs review" | "Indexed" =>
-  status === "needs_review" ? "Needs review" : status === "completed" ? "Processed" : "Indexed";
+const displayStatus = (status: string | null): "Processed" | "Needs review" | "Indexed" | "Failed" =>
+  status === "needs_review" || status === "completed_with_warnings"
+    ? "Needs review"
+    : status === "failed"
+      ? "Failed"
+      : status === "completed"
+        ? "Processed"
+        : "Indexed";
 
 export default function RecentDocuments() {
   const [documents, setDocuments] = useState<Awaited<ReturnType<typeof getDashboardStats>>["data"]["recent_documents"]>([]);

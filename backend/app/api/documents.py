@@ -149,11 +149,28 @@ async def upload_document(
                 language=norm_lang,
             )
             logger.info(
-                "OCR finished for document %s engine=%s pages=%s",
+                "OCR finished for document %s engine=%s pages=%s status=%s warnings=%s",
                 document.id,
                 ocr_res.ocr_engine,
                 len(ocr_res.pages),
+                ocr_res.processing_status,
+                ocr_res.quality_warnings,
             )
+
+            if ocr_res.processing_status == "failed" or not ocr_res.combined_text.strip():
+                document.status = "failed"
+                document.processed_at = func.now()
+                failure_reason = ocr_res.error_message or "no-usable-text-extracted"
+                if ocr_res.quality_warnings:
+                    failure_reason += "; validation: " + ", ".join(ocr_res.quality_warnings)
+                db.add(ReviewQueue(
+                    document_id=document.id,
+                    reason=f"Document extraction failed: {failure_reason}",
+                    status="pending",
+                ))
+                db.commit()
+                db.refresh(document)
+                return document
 
             # ------------------------------------------------
             # Save pages + OCR results
@@ -185,12 +202,14 @@ async def upload_document(
                         else None
                     )
 
+                    if not p.text.strip():
+                        continue
                     ocr_row = OCRResult(
                         document_id=document.id,
                         page_id=page_id,
                         extracted_text=p.text,
                         confidence=p.confidence,
-                        ocr_engine=ocr_res.ocr_engine,
+                        ocr_engine=p.ocr_engine or ocr_res.ocr_engine,
                     )
 
                     db.add(ocr_row)
@@ -248,6 +267,8 @@ async def upload_document(
 
             final_status = DocumentStatus.PENDING_REVIEW.value
             review_reason = routed_reason or report.review_reason or "Pending verification"
+            if ocr_res.quality_warnings:
+                review_reason = "; ".join(ocr_res.quality_warnings)
             if route_to and route_to not in review_reason:
                 review_reason = f"[{route_to}] {review_reason}"
 
@@ -266,7 +287,12 @@ async def upload_document(
             document.department = resolved_dept
             document.document_type = resolved_doc_type
             document.overall_confidence = report.overall_confidence
-            document.status = final_status
+            if ocr_res.processing_status == "needs_review":
+                document.status = "needs_review"
+            elif ocr_res.processing_status == "completed_with_warnings":
+                document.status = "completed_with_warnings"
+            else:
+                document.status = final_status
             document.processed_at = func.now()
 
             db.commit()
@@ -316,6 +342,99 @@ async def upload_document(
     finally:
 
         await file.close()
+
+
+@router.post("/{document_id}/reprocess", response_model=DocumentResponse)
+def reprocess_document(
+    document_id: int,
+    language: str = Query("auto"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retry extraction for the uploader or an administrator, preserving prior results on failure."""
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if (
+        UserRole.normalize(current_user.role) != UserRole.ADMIN.value
+        and document.uploaded_by != current_user.id
+    ):
+        raise HTTPException(status_code=403, detail="Only the uploader or an administrator can reprocess this document.")
+    normalized_language = (language or "auto").lower().strip()
+    if normalized_language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(status_code=400, detail="Unsupported OCR language.")
+    disk_path = UPLOAD_DIR / document.stored_filename
+    result = extract_document_text(disk_path, document.file_type, language=normalized_language)
+    logger.info(
+        "Reprocess document=%s method=%s status=%s pages=%s warnings=%s",
+        document.id, result.ocr_engine, result.processing_status, len(result.pages), result.quality_warnings,
+    )
+    if result.processing_status == "failed" or not result.combined_text.strip():
+        failure_reason = result.error_message or "no-usable-text-extracted"
+        if result.quality_warnings:
+            failure_reason += "; validation: " + ", ".join(result.quality_warnings)
+        db.add(ReviewQueue(
+            document_id=document.id,
+            reason=f"Reprocessing failed; previous extraction preserved: {failure_reason}",
+            status="pending",
+        ))
+        db.commit()
+        raise HTTPException(status_code=422, detail="Reprocessing failed; the previous extraction was preserved.")
+
+    # Only replace the old extraction after a complete, validated replacement exists.
+    delete_document_embeddings(db, document.id)
+    db.query(ExtractedField).filter(ExtractedField.document_id == document.id).delete(synchronize_session=False)
+    db.query(OCRResult).filter(OCRResult.document_id == document.id).delete(synchronize_session=False)
+    db.query(DocumentPage).filter(DocumentPage.document_id == document.id).delete(synchronize_session=False)
+    db.query(ReviewQueue).filter(ReviewQueue.document_id == document.id).delete(synchronize_session=False)
+    page_map: dict[int, DocumentPage] = {}
+    for extracted_page in result.pages:
+        page = DocumentPage(
+            document_id=document.id,
+            page_number=extracted_page.page_number,
+            page_path=document.file_path,
+            width=extracted_page.width,
+            height=extracted_page.height,
+        )
+        db.add(page)
+        page_map[page.page_number] = page
+    db.flush()
+    for extracted_page in result.pages:
+        if not extracted_page.text.strip():
+            continue
+        db.add(OCRResult(
+            document_id=document.id,
+            page_id=page_map[extracted_page.page_number].id,
+            extracted_text=extracted_page.text,
+            confidence=extracted_page.confidence,
+            ocr_engine=extracted_page.ocr_engine or result.ocr_engine,
+        ))
+    report = extract_document_report(result)
+    for extracted_field in report.fields:
+        db.add(ExtractedField(
+            document_id=document.id,
+            page_id=page_map.get(extracted_field.page_number).id if extracted_field.page_number in page_map else None,
+            field_name=extracted_field.field_name,
+            field_value=extracted_field.field_value,
+            confidence=extracted_field.confidence,
+            original_value=extracted_field.original_value,
+            corrected_value=extracted_field.corrected_value,
+            is_verified=extracted_field.is_verified,
+        ))
+    document.overall_confidence = report.overall_confidence
+    document.processed_at = func.now()
+    if result.processing_status == "needs_review":
+        document.status = "needs_review"
+    elif result.processing_status == "completed_with_warnings":
+        document.status = "completed_with_warnings"
+    else:
+        document.status = DocumentStatus.PENDING_REVIEW.value
+    reason = "; ".join(result.quality_warnings) or report.review_reason or "Reprocessed; pending verification"
+    db.add(ReviewQueue(document_id=document.id, reason=reason, confidence=report.overall_confidence, status="pending"))
+    db.commit()
+    db.refresh(document)
+    schedule_document_indexing(document.id)
+    return document
 
 
 # ============================================================

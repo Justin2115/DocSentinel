@@ -396,22 +396,25 @@ def get_active_confidence_threshold(db: Session) -> float:
 
 
 def evaluate_document_routing(
-    db: Session, document_type: str | None, confidence: float
+    db: Session, document_type: str | None, confidence: float | None
 ) -> tuple[bool, str | None, str | None]:
     """
     Check if a document triggers auto-flagging and determine routing note.
     Returns: (requires_review, review_reason, route_to)
     """
     threshold = get_active_confidence_threshold(db)
-    requires_review = confidence < threshold
+    requires_review = confidence is None or confidence < threshold
     route_to = None
     reason = None
 
     if requires_review:
-        reason = f"Confidence score ({confidence:.1f}%) is below auto-flag threshold ({threshold:.1f}%)"
+        if confidence is None:
+            reason = "Confidence unavailable; human verification required"
+        else:
+            reason = f"Provider OCR confidence ({confidence:.1f}) is below auto-flag threshold ({threshold:.1f})"
 
     # Check routing rules
-    if document_type:
+    if document_type and confidence is not None:
         rule = (
             db.query(WorkflowRule)
             .filter(

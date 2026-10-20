@@ -82,6 +82,16 @@ sequenceDiagram
 
 A raw LLM call has no knowledge of an organization's private documents and can hallucinate facts. RAG grounds every answer in retrieved chunks from the vector database, and because each chunk carries its `document_id` + `page_number`, the answer can cite exactly where it came from — this is what makes Module 1 auditable rather than a black box.
 
+## Current Search and RAG Implementation
+
+Search routes require an authenticated user. Before querying, the API builds the user's readable document scope from the existing role, department, assignment, and configured folder permissions. That scope constrains both SQL keyword results and Chroma vector retrieval; vector metadata is checked against database documents before results become citations. Search currently fuses keyword and vector rankings with reciprocal rank fusion. This is a ranking heuristic, not a calibrated relevance probability.
+
+OCR text is chunked on paragraph and sentence boundaries where possible, with page numbers retained in vector metadata. Upload processing schedules indexing in a background thread, and startup backfills documents that have OCR rows but no embedding index. Stable document/page/chunk IDs make repeated indexing idempotent; new vectors are upserted before stale vectors are removed.
+
+`POST /api/search/ask` retrieves scoped evidence and constructs citation objects from database records and retrieved excerpts. An OpenAI-compatible chat-completions endpoint can optionally generate an evidence-only answer when `RAG_LLM_BASE_URL`, `RAG_LLM_MODEL`, and `RAG_LLM_API_KEY` are configured. Without that configuration, the endpoint returns a retrieved-only status and the UI presents source passages instead of implying that a generated answer exists. Citation links open the document's OCR panel and scroll to the cited page when one is available.
+
+The endpoint validates citation marker IDs and the backend controls the linked document/page, but it does not independently verify that every generated claim is entailed by its cited excerpt. No curated multilingual relevance benchmark or production LLM integration has been run yet. Use `backend/scripts/search_benchmark.py` with manually judged JSONL queries to measure ranking and abstention behavior before making accuracy claims. The current multilingual embedding model's performance on the project's target languages must be established with that evaluation.
+
 ## Module Boundaries
 
 ```mermaid

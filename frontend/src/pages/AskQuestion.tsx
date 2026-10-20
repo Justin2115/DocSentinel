@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { Checkbox, FormControlLabel } from "@mui/material";
 
 import SendOutlinedIcon from "@mui/icons-material/SendOutlined";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
 
-import { searchSemantic } from "../api/search";
-import type { SemanticSearchHit } from "../api/search";
+import { askDocuments } from "../api/search";
+import type { AnswerCitation } from "../api/search";
 
 const sampleQuestions = [
 	"What are the key points in my documents?",
@@ -19,7 +20,8 @@ const sampleQuestions = [
 type Message = {
 	type: "user" | "ai";
 	text: string;
-	hits?: SemanticSearchHit[];
+	citations?: AnswerCitation[];
+	evidenceStatus?: string;
 };
 
 const AskQuestion = () => {
@@ -28,9 +30,10 @@ const AskQuestion = () => {
 	const [question, setQuestion] = useState("");
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isSearching, setIsSearching] = useState(false);
+	const [includeCitations, setIncludeCitations] = useState(true);
 	const processedQuery = useRef<string | null>(null);
 
-	const runSemanticSearch = async (query: string) => {
+	const runQuestion = async (query: string) => {
 		setIsSearching(true);
 		setMessages((previous) => [
 			...previous,
@@ -39,16 +42,14 @@ const AskQuestion = () => {
 		setQuestion("");
 
 		try {
-			const response = await searchSemantic(query);
-			const hits = response.data.items;
+			const response = await askDocuments(query, includeCitations);
 			setMessages((previous) => [
 				...previous,
 				{
 					type: "ai",
-					text: hits.length
-						? `Found ${hits.length} related passage${hits.length === 1 ? "" : "s"} in your documents.`
-						: "No semantic matches. Upload and index documents, or try a different question.",
-					hits,
+					text: response.data.answer,
+					citations: response.data.citations,
+					evidenceStatus: response.data.evidence_status,
 				},
 			]);
 		} catch {
@@ -56,7 +57,7 @@ const AskQuestion = () => {
 				...previous,
 				{
 					type: "ai",
-					text: "Semantic search is unavailable right now. Make sure the API is running and documents are indexed.",
+					text: "Document search is unavailable right now. Check the connection and try again.",
 				},
 			]);
 		} finally {
@@ -70,7 +71,7 @@ const AskQuestion = () => {
 			return;
 		}
 		processedQuery.current = query;
-		void runSemanticSearch(query);
+		void runQuestion(query);
 	}, [searchParams]);
 
 	const handleSend = () => {
@@ -78,7 +79,7 @@ const AskQuestion = () => {
 		if (!trimmedQuestion || isSearching) {
 			return;
 		}
-		void runSemanticSearch(trimmedQuestion);
+		void runQuestion(trimmedQuestion);
 	};
 
 	return (
@@ -135,30 +136,34 @@ const AskQuestion = () => {
 										</div>
 									)}
 									<div className="messageColumn">
-										<div className="messageBubble">{message.text}</div>
-										{message.hits && message.hits.length > 0 && (
+										<div className="messageBubble">
+											{message.type === "ai"
+												? message.text.split(/(\[S\d+\])/g).map((part, partIndex) => {
+													const citation = message.citations?.find((item) => `[${item.source_id}]` === part);
+													return citation ? (
+														<button key={`${part}-${partIndex}`} className="inlineCitation" type="button" onClick={() => navigate(citation.href)}>{part}</button>
+													) : <span key={`${part}-${partIndex}`}>{part}</span>;
+												})
+												: message.text}
+										</div>
+										{message.evidenceStatus === "retrieved_only" && <span className="aiDisclaimer">Answer generation is not configured; these are retrieved source passages.</span>}
+										{message.citations && message.citations.length > 0 && (
 											<div className="sourceCards">
-												{message.hits.map((hit) => (
+												{message.citations.map((citation) => (
 													<button
-														key={`${hit.document_id}-${hit.page_number}-${hit.chunk_index}`}
+														key={citation.source_id}
 														type="button"
 														className="sourceCard"
-														onClick={() =>
-															navigate(
-																`/library?preview=${hit.document_id}`
-															)
-														}
+														onClick={() => navigate(citation.href)}
 													>
 														<div className="sourceCardHeader">
-															<strong>{hit.document_name}</strong>
-															<span className="similarityBadge">
-																{Math.round(hit.similarity * 100)}%
-															</span>
+															<strong>{citation.document_title}</strong>
+															<span className="similarityBadge">{citation.source_id}</span>
 														</div>
 														<span className="sourceCardMeta">
-															Page {hit.page_number}
+															{citation.page_number ? `Page ${citation.page_number}` : "Document"}
 														</span>
-														<p>{hit.snippet}</p>
+														<p>{citation.excerpt}</p>
 													</button>
 												))}
 											</div>
@@ -179,6 +184,10 @@ const AskQuestion = () => {
 				</div>
 
 				<div className="chatBottom">
+					<FormControlLabel
+						control={<Checkbox checked={includeCitations} onChange={(event) => setIncludeCitations(event.target.checked)} size="small" />}
+						label="Include source citations"
+					/>
 					<div className="selectedDocument">
 						<DescriptionOutlinedIcon />
 						<span>All documents</span>
@@ -213,8 +222,7 @@ const AskQuestion = () => {
 						</button>
 					</div>
 					<span className="aiDisclaimer">
-						Results are retrieved passages, not generated answers. Verify
-						important information.
+						Answers use retrieved passages when a chat model is configured. Verify important information in the linked sources.
 					</span>
 				</div>
 			</div>

@@ -1,5 +1,5 @@
 interface StatusBadgeProps {
-  status: "Processed" | "Needs review" | "Indexed";
+  status: "Processed" | "Needs review" | "Indexed" | "Failed";
 }
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
@@ -7,12 +7,14 @@ export default function StatusBadge({ status }: StatusBadgeProps) {
     Processed: "#DDF4EC",
     "Needs review": "#FFE7DD",
     Indexed: "#ECE7FF",
+    Failed: "#FEE2E2",
   };
 
   const text = {
     Processed: "#0B7A5C",
     "Needs review": "#F97316",
     Indexed: "#6366F1",
+    Failed: "#B91C1C",
   };
 
   return (

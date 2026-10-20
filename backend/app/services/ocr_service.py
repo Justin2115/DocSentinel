@@ -2,6 +2,8 @@ import io
 import logging
 import os
 import re
+import time
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,10 @@ os.environ["FLAGS_use_mkldnn"] = "0"
 os.environ["FLAGS_use_onednn"] = "0"
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
+
+from app.core.config import settings
+from app.services.ocr_quality import SEVERE_TEXT_WARNINGS, assess_ocr_text
 
 logger = logging.getLogger(__name__)
 
@@ -143,22 +148,143 @@ def get_paddle_english_engine():
 class ExtractedPage:
     page_number: int
     text: str
-    confidence: float
+    confidence: float | None
     detected_language: str = "en"
     width: int | None = None
     height: int | None = None
     page_path: str | None = None
+    notes: str | None = None
+    is_skipped: bool = False
+    quality_warnings: list[str] = field(default_factory=list)
+    retry_history: list[dict[str, Any]] = field(default_factory=list)
+    confidence_provider: str | None = None
+    ocr_engine: str | None = None
 
 
 @dataclass
 class DocumentExtractionResult:
     pages: list[ExtractedPage] = field(default_factory=list)
     combined_text: str = ""
-    overall_ocr_confidence: float = 0.0
+    overall_ocr_confidence: float | None = None
     ocr_engine: str = "direct_extraction"
     detected_language: str = "en"
     is_ocr_applied: bool = False
+    schema_version: str = "1.1"
+    processing_status: str = "completed"
+    error_message: str | None = None
+    quality_warnings: list[str] = field(default_factory=list)
 
+
+def get_available_tesseract_languages() -> set[str]:
+    """Return the installed Tesseract language codes."""
+    try:
+        import pytesseract
+
+        tessdata_path = settings.OCR_TESSDATA_PATH or None
+        config = f"--tessdata-dir {tessdata_path}" if tessdata_path else None
+        languages = pytesseract.get_languages(config=config) if config else pytesseract.get_languages()
+        return {lang for lang in languages if isinstance(lang, str)}
+    except Exception as exc:  # pragma: no cover - depends on local Tesseract install
+        logger.warning("Tesseract language check failed: %s", exc)
+        return set()
+
+
+def detect_blank_page(image: Image.Image, threshold: float | None = None, min_text_pixels: int | None = None) -> tuple[bool, str, float]:
+    """Return whether the image is effectively blank and the reason it was skipped."""
+    threshold = settings.OCR_BLANK_THRESHOLD if threshold is None else threshold
+    min_text_pixels = settings.OCR_MIN_TEXT_PIXELS if min_text_pixels is None else min_text_pixels
+
+    gray = image.convert("L")
+    arr = np.asarray(gray, dtype=np.uint8)
+    total_pixels = arr.size
+    dark_pixels = float(np.count_nonzero(arr < 245))
+    dark_ratio = dark_pixels / max(total_pixels, 1)
+    text_pixels = float(np.count_nonzero(arr < 200))
+    avg_intensity = float(arr.mean())
+
+    if text_pixels <= min_text_pixels and dark_ratio <= threshold:
+        return True, "blank-or-nearly-blank", dark_ratio
+    if avg_intensity > 245 and dark_pixels < 0.02 * total_pixels and text_pixels <= min_text_pixels:
+        return True, "mostly-white-page", dark_ratio
+    return False, "has-text-content", dark_ratio
+
+
+def preprocess_scan_for_ocr(image: Image.Image) -> Image.Image:
+    """Apply a conservative preprocessing pass for degraded scans without destroying text detail."""
+    processed = image.convert("RGB")
+    processed = ImageOps.grayscale(processed)
+    processed = ImageOps.autocontrast(processed)
+    if settings.OCR_PREPROCESS_DENOISE:
+        processed = processed.filter(ImageFilter.MedianFilter(3))
+    min_width, min_height = 1500, 1200
+    scale = max(1.0, min_width / processed.width, min_height / processed.height)
+    if scale > 1.0:
+        processed = processed.resize(
+            (round(processed.width * scale), round(processed.height * scale)),
+            Image.Resampling.LANCZOS,
+        )
+    return processed
+
+
+def _tesseract_language_code(language: str) -> str:
+    normalized = (language or "auto").lower().strip()
+    available = get_available_tesseract_languages()
+    preferred = {"en": "eng", "mr": "mar", "hi": "hin", "en+mr": "eng+mar", "en+hi": "eng+hin"}
+    if normalized in preferred:
+        code = preferred[normalized]
+        if code == "eng+mar" and "eng" in available and "mar" in available:
+            return code
+        if code == "eng+hin" and "eng" in available and "hin" in available:
+            return code
+        if code in {"eng", "mar", "hin"} and code in available:
+            return code
+        # An explicit language request must not silently fall back to another script.
+        return ""
+    if normalized == "auto":
+        installed = [code for code in ("eng", "hin", "mar") if code in available]
+        return "+".join(installed)
+    return ""
+
+
+def _run_tesseract_ocr(image: Image.Image, language: str = "auto") -> tuple[str, float, str]:
+    """Run a conservative Tesseract pass for English/Marathi text on degraded or mixed scan pages."""
+    try:
+        import pytesseract
+
+        tessdata_dir = settings.OCR_TESSDATA_PATH or None
+        config = ["--oem", "3", "--psm", str(settings.OCR_PAGE_SEG_MODE)]
+        if tessdata_dir:
+            config.extend(["--tessdata-dir", tessdata_dir])
+
+        lang_code = _tesseract_language_code(language)
+        if not lang_code:
+            logger.info("Tesseract skipped: requested language data is unavailable (%s)", language)
+            return "", 0.0, "Tesseract-Unsupported-Language"
+        data = pytesseract.image_to_data(
+            image,
+            config=" ".join(config),
+            lang=lang_code,
+            output_type=pytesseract.Output.DICT,
+        )
+
+        texts = [value for value in data.get("text", []) if value and value.strip()]
+        confs = []
+        for idx, word in enumerate(data.get("text", [])):
+            conf = data.get("conf", [])[idx] if idx < len(data.get("conf", [])) else "-1"
+            if word and word.strip():
+                try:
+                    score = float(conf)
+                    if score >= 0:
+                        confs.append(score)
+                except ValueError:
+                    pass
+
+        full_text = " ".join(texts)
+        avg_conf = (sum(confs) / len(confs)) if confs else 0.0
+        return full_text, round(avg_conf, 2), "Tesseract"
+    except Exception as exc:
+        logger.warning("Tesseract OCR failed: %s", exc)
+        return "", 0.0, "Tesseract"
 
 def clean_extracted_text(text: str) -> str:
     """
@@ -289,24 +415,21 @@ def detect_language(text: str) -> tuple[str, float, dict[str, Any]]:
 def _perform_image_ocr(
     image: Image.Image, language: str = "auto"
 ) -> tuple[str, float, str, str]:
-    """
-    Perform OCR on a PIL Image:
-    - 'auto': Runs PaddleOCR Multilingual Devanagari model, then automatically classifies language ('en', 'hi', 'mr', 'en+hi', 'en+mr', 'uncertain').
-    - 'en': Runs RapidOCR baseline (with Tesseract fallback).
-    - 'hi' / 'mr': Runs PaddleOCR Devanagari model with designated regional tag.
+    """Perform OCR on a PIL Image using the best available local engine."""
+    norm_lang = (language or settings.OCR_LANGUAGE or "auto").lower().strip()
 
-    Returns:
-        tuple[extracted_text, confidence_percent, engine_name, detected_language]
-    """
-    norm_lang = (language or "auto").lower().strip()
+    processed_image = preprocess_scan_for_ocr(image)
+    is_blank, reason, blank_ratio = detect_blank_page(processed_image)
+    if is_blank:
+        logger.info("Skipping blank page preflight: %s (dark_ratio=%.4f)", reason, blank_ratio)
+        return "", 0.0, "Skipped-Blank", "en"
 
-    # 1. Explicit English Request -> RapidOCR Baseline
     if norm_lang == "en":
         rapid_engine = get_rapid_ocr_engine()
         if rapid_engine is not None:
             try:
                 img_byte_arr = io.BytesIO()
-                image.convert("RGB").save(img_byte_arr, format="PNG")
+                processed_image.convert("RGB").save(img_byte_arr, format="PNG")
                 img_bytes = img_byte_arr.getvalue()
 
                 ocr_res, _ = rapid_engine(img_bytes)
@@ -316,38 +439,18 @@ def _perform_image_ocr(
                     full_text = "\n".join(texts)
                     avg_confidence = (sum(scores) / len(scores)) if scores else 0.0
                     return full_text, round(avg_confidence * 100.0, 2), "RapidOCR", "en"
-                else:
-                    return "", 0.0, "RapidOCR", "en"
-            except Exception as e:
-                logger.warning(f"RapidOCR extraction failed: {e}")
+            except Exception as exc:
+                logger.warning("RapidOCR extraction failed: %s", exc)
 
-        # Tesseract fallback for English
-        try:
-            import pytesseract
-
-            data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
-            confidences = []
-            words = []
-            for i, word in enumerate(data.get("text", [])):
-                if word.strip():
-                    words.append(word)
-                    conf = float(data["conf"][i])
-                    if conf >= 0:
-                        confidences.append(conf)
-
-            full_text = " ".join(words)
-            avg_conf = (sum(confidences) / len(confidences)) if confidences else 70.0
-            return full_text, round(avg_conf, 2), "Tesseract", "en"
-        except Exception as e:
-            logger.warning(f"Tesseract English OCR fallback failed: {e}")
-
+        tesseract_text, tesseract_conf, _ = _run_tesseract_ocr(processed_image, language="en")
+        if tesseract_text.strip():
+            return tesseract_text, tesseract_conf, "Tesseract", "en"
         return "", 0.0, "None", "en"
 
-    # 2. Automatic Language Detection or Regional Language -> PaddleOCR Multilingual Pipeline
     paddle_engine = get_paddle_devanagari_engine()
     if paddle_engine is not None:
         try:
-            img_np = np.array(image.convert("RGB"))
+            img_np = np.array(processed_image.convert("RGB"))
             h, w = img_np.shape[:2]
             pad_h = (32 - (h % 32)) % 32
             pad_w = (32 - (w % 32)) % 32
@@ -355,25 +458,14 @@ def _perform_image_ocr(
                 img_np = np.pad(img_np, ((0, pad_h), (0, pad_w), (0, 0)), mode="edge")
 
             ocr_res = paddle_engine.ocr(img_np, cls=False)
-
-
-
             if ocr_res and ocr_res[0]:
                 lines = ocr_res[0]
                 texts = [line[1][0] for line in lines if line[1][0].strip()]
                 scores = [float(line[1][1]) for line in lines if line[1][0].strip()]
-
                 raw_text = "\n".join(texts)
                 avg_confidence = (sum(scores) / len(scores)) if scores else 0.0
                 conf_pct = round(avg_confidence * 100.0, 2)
-
-                # Automatic Language Detection on the OCR extracted text
-                if norm_lang == "auto":
-                    detected_lang, _, _ = detect_language(raw_text)
-                else:
-                    detected_lang = norm_lang
-
-                # Assign descriptive OCR engine name
+                detected_lang = detect_language(raw_text)[0] if norm_lang == "auto" else norm_lang
                 if detected_lang == "mr":
                     engine_name = "PaddleOCR-Marathi"
                 elif detected_lang == "hi":
@@ -386,22 +478,16 @@ def _perform_image_ocr(
                     engine_name = "PaddleOCR-English"
                 else:
                     engine_name = "PaddleOCR-Devanagari"
-
                 return raw_text, conf_pct, engine_name, detected_lang
-            else:
-                return "", 0.0, "PaddleOCR-Devanagari", "en"
-        except Exception as e:
-            logger.exception(f"PaddleOCR extraction failed: {e}")
+        except Exception as exc:
+            logger.exception("PaddleOCR extraction failed: %s", exc)
 
-
-    # Fallback to RapidOCR if PaddleOCR fails
     rapid_engine = get_rapid_ocr_engine()
     if rapid_engine is not None:
         try:
             img_byte_arr = io.BytesIO()
-            image.convert("RGB").save(img_byte_arr, format="PNG")
+            processed_image.convert("RGB").save(img_byte_arr, format="PNG")
             img_bytes = img_byte_arr.getvalue()
-
             ocr_res, _ = rapid_engine(img_bytes)
             if ocr_res:
                 texts = [item[1] for item in ocr_res]
@@ -410,12 +496,15 @@ def _perform_image_ocr(
                 avg_confidence = (sum(scores) / len(scores)) if scores else 0.0
                 det_lang, _, _ = detect_language(full_text)
                 return full_text, round(avg_confidence * 100.0, 2), "RapidOCR-Fallback", det_lang
-        except Exception as e:
-            logger.warning(f"RapidOCR fallback failed: {e}")
+        except Exception as exc:
+            logger.warning("RapidOCR fallback failed: %s", exc)
+
+    tesseract_text, tesseract_conf, _ = _run_tesseract_ocr(processed_image, language=norm_lang)
+    if tesseract_text.strip():
+        det_lang, _, _ = detect_language(tesseract_text)
+        return tesseract_text, tesseract_conf, "Tesseract", det_lang
 
     return "", 0.0, "None", "en"
-
-
 def process_image_document(
     file_path: Path, language: str = "auto"
 ) -> DocumentExtractionResult:
@@ -428,21 +517,25 @@ def process_image_document(
             extracted_text, confidence, engine, detected_lang = _perform_image_ocr(
                 img, language=language
             )
+            raw_warnings = assess_ocr_text(extracted_text).warnings
             cleaned_text = clean_extracted_text(extracted_text)
 
             page = ExtractedPage(
                 page_number=1,
                 text=cleaned_text,
-                confidence=confidence,
+                confidence=confidence if confidence > 0 else None,
                 detected_language=detected_lang,
                 width=width,
                 height=height,
+                confidence_provider=engine if confidence > 0 else None,
+                ocr_engine=engine,
+                quality_warnings=raw_warnings,
             )
 
             return DocumentExtractionResult(
                 pages=[page],
                 combined_text=cleaned_text,
-                overall_ocr_confidence=confidence,
+                overall_ocr_confidence=confidence if confidence > 0 else None,
                 ocr_engine=engine,
                 detected_language=detected_lang,
                 is_ocr_applied=True,
@@ -450,25 +543,21 @@ def process_image_document(
     except Exception as e:
         logger.error(f"Failed to process image {file_path}: {e}")
         return DocumentExtractionResult(
-            pages=[ExtractedPage(page_number=1, text="", confidence=0.0)],
+            pages=[ExtractedPage(page_number=1, text="", confidence=None)],
             combined_text="",
-            overall_ocr_confidence=0.0,
+            overall_ocr_confidence=None,
             ocr_engine="Error",
             detected_language="en",
             is_ocr_applied=True,
+            processing_status="failed",
+            error_message="image-ocr-provider-failed",
         )
 
 
 def process_pdf_document(
     file_path: Path, language: str = "auto"
 ) -> DocumentExtractionResult:
-    """
-    Process PDF documents:
-    - Extracts embedded text directly using PyMuPDF.
-    - Performs automatic language detection on extracted digital text.
-    - If a page has minimal or no embedded text (scanned PDF), rasterizes to image and runs PaddleOCR.
-    - Aggregates all pages, detected languages, and confidence scores.
-    """
+    """Process one PDF using PyMuPDF first, then OCR only for scanned pages."""
     try:
         import pymupdf as fitz
 
@@ -476,8 +565,7 @@ def process_pdf_document(
         pages: list[ExtractedPage] = []
         ocr_applied_any = False
         engines_used: list[str] = []
-        page_languages: list[str] = []
-        all_confidences: list[float] = []
+        all_confidences: list[tuple[str, float]] = []
 
         for page_idx in range(len(doc)):
             page_num = page_idx + 1
@@ -486,70 +574,97 @@ def process_pdf_document(
             width = int(rect.width)
             height = int(rect.height)
 
-            # Direct text extraction
             direct_text = pdf_page.get_text()
+            direct_warnings = assess_ocr_text(
+                direct_text, expected_content=bool(direct_text.strip())
+            ).warnings
             cleaned_direct = clean_extracted_text(direct_text)
+            alpha_chars = sum(1 for char in cleaned_direct if char.isalnum())
 
-            # Check if page has sufficient extractable text (digital PDF) or if it is scanned
-            alpha_chars = sum(1 for c in cleaned_direct if c.isalnum())
             if alpha_chars >= 20:
-                # Digital text PDF page
-                page_confidence = 98.0
                 det_lang, _, _ = detect_language(cleaned_direct)
-                all_confidences.append(page_confidence)
-                page_languages.append(det_lang)
-                engines_used.append("PyMuPDF")
-
                 pages.append(
                     ExtractedPage(
                         page_number=page_num,
                         text=cleaned_direct,
-                        confidence=page_confidence,
+                        confidence=None,
                         detected_language=det_lang,
                         width=width,
                         height=height,
+                        notes="embedded-pdf-text",
+                        confidence_provider=None,
+                        ocr_engine="PyMuPDF",
+                        quality_warnings=direct_warnings,
                     )
                 )
-            else:
-                # Scanned page - rasterize to image and OCR with PaddleOCR
-                ocr_applied_any = True
-                pix = pdf_page.get_pixmap(dpi=200)
-                img = Image.open(io.BytesIO(pix.tobytes("png")))
-                ocr_text, ocr_conf, ocr_engine, det_lang = _perform_image_ocr(
-                    img, language=language
-                )
-                cleaned_ocr = clean_extracted_text(ocr_text)
+                engines_used.append("PyMuPDF")
+                continue
 
-                all_confidences.append(ocr_conf)
-                page_languages.append(det_lang)
-                engines_used.append(f"PyMuPDF+{ocr_engine}")
-
+            pix = pdf_page.get_pixmap(dpi=settings.OCR_RENDER_DPI)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            blank, reason, blank_ratio = detect_blank_page(img)
+            if blank:
+                logger.info("Skipping page %s in %s: %s (dark_ratio=%.4f)", page_num, file_path.name, reason, blank_ratio)
                 pages.append(
                     ExtractedPage(
                         page_number=page_num,
-                        text=cleaned_ocr or cleaned_direct,
-                        confidence=ocr_conf if ocr_conf > 0 else 50.0,
-                        detected_language=det_lang,
+                        text="",
+                        confidence=None,
+                        detected_language="en",
                         width=width,
                         height=height,
+                        notes=f"skipped:{reason}",
+                        is_skipped=True,
+                        ocr_engine="blank-page-detector",
                     )
                 )
+                continue
+
+            ocr_applied_any = True
+            ocr_text, ocr_conf, ocr_engine, det_lang = _perform_image_ocr(img, language=language)
+            raw_ocr_warnings = assess_ocr_text(ocr_text).warnings
+            cleaned_ocr = clean_extracted_text(ocr_text)
+            severe_ocr_warnings = set(raw_ocr_warnings) & SEVERE_TEXT_WARNINGS
+            if severe_ocr_warnings:
+                logger.warning(
+                    "Rejected PDF OCR output page=%s categories=%s",
+                    page_num,
+                    sorted(severe_ocr_warnings),
+                )
+                cleaned_ocr = ""
+                raw_ocr_warnings = [
+                    warning for warning in raw_ocr_warnings
+                    if warning not in SEVERE_TEXT_WARNINGS
+                ] + ["ocr-output-rejected"]
+            if ocr_conf > 0:
+                all_confidences.append((ocr_engine, ocr_conf))
+            engines_used.append(f"PyMuPDF+{ocr_engine}")
+
+            pages.append(
+                ExtractedPage(
+                    page_number=page_num,
+                    text=cleaned_ocr or cleaned_direct,
+                    confidence=ocr_conf if ocr_conf > 0 else None,
+                    detected_language=det_lang,
+                    width=width,
+                    height=height,
+                    notes="ocr-scanned-page",
+                    quality_warnings=direct_warnings + raw_ocr_warnings,
+                    confidence_provider=ocr_engine if ocr_conf > 0 else None,
+                    ocr_engine=ocr_engine,
+                )
+            )
 
         doc.close()
 
-        combined_text = "\n\n".join(p.text for p in pages if p.text).strip()
+        combined_text = "\n\n".join(page.text for page in pages if page.text).strip()
+        confidence_providers = {provider for provider, _ in all_confidences}
         overall_conf = (
-            round(sum(all_confidences) / len(all_confidences), 2)
-            if all_confidences
-            else 0.0
+            round(sum(score for _, score in all_confidences) / len(all_confidences), 2)
+            if all_confidences and len(confidence_providers) == 1
+            else None
         )
-
-        # Primary engine and document-level detected language
-        if ocr_applied_any:
-            engine_str = ", ".join(sorted(set(engines_used)))
-        else:
-            engine_str = "PyMuPDF"
-
+        engine_str = ", ".join(sorted(set(engines_used))) if ocr_applied_any else "PyMuPDF"
         doc_detected_lang, _, _ = detect_language(combined_text)
 
         return DocumentExtractionResult(
@@ -560,61 +675,309 @@ def process_pdf_document(
             detected_language=doc_detected_lang,
             is_ocr_applied=ocr_applied_any,
         )
-    except Exception as e:
-        logger.error(f"Failed to process PDF {file_path}: {e}")
+    except Exception as exc:
+        logger.error("Failed to process PDF %s: %s", file_path, exc)
         return DocumentExtractionResult(
             pages=[],
             combined_text="",
-            overall_ocr_confidence=0.0,
+            overall_ocr_confidence=None,
             ocr_engine="Error",
             detected_language="en",
             is_ocr_applied=False,
+            processing_status="failed",
+            error_message="pdf-parser-or-ocr-failed",
         )
-
-
 def extract_document_text(
     file_path: Path, file_type: str, language: str = "auto"
 ) -> DocumentExtractionResult:
-    """
-    Main entry point for document text and OCR extraction with automatic language detection.
-    Dispatches to PDF or Image processor based on file extension and MIME type.
-    """
+    """Route verified file content to its native parser or the existing OCR path."""
+    started = time.perf_counter()
     suffix = file_path.suffix.lower()
-    lang = (language or "auto").lower().strip()
+    language = (language or "auto").lower().strip()
+    try:
+        kind = _detect_document_kind(file_path, file_type)
+        logger.info("Detected document kind=%s suffix=%s mime=%s", kind, suffix, file_type)
+        if kind == "pdf":
+            result = process_pdf_document(file_path, language=language)
+        elif kind == "image":
+            result = process_image_document(file_path, language=language)
+        elif kind == "docx":
+            result = _extract_docx(file_path, language=language)
+        elif kind == "xlsx":
+            result = _extract_xlsx(file_path, language=language)
+        elif kind == "text":
+            result = _extract_plain_text(file_path)
+        else:  # pragma: no cover - guarded by _detect_document_kind
+            raise ValueError("unsupported-file-format")
+        _validate_extraction_result(result)
+        logger.info(
+            "Document extraction finished kind=%s method=%s pages=%d status=%s warnings=%s elapsed=%.3fs",
+            kind,
+            result.ocr_engine,
+            len(result.pages),
+            result.processing_status,
+            result.quality_warnings,
+            time.perf_counter() - started,
+        )
+        return result
+    except (ValueError, OSError, zipfile.BadZipFile) as exc:
+        reason = str(exc) or "invalid-or-unsupported-document"
+        logger.warning(
+            "Document extraction rejected suffix=%s category=%s elapsed=%.3fs",
+            suffix,
+            reason,
+            time.perf_counter() - started,
+        )
+        return DocumentExtractionResult(
+            pages=[], combined_text="", ocr_engine="Error",
+            detected_language="en", is_ocr_applied=False,
+            processing_status="failed", error_message=reason,
+        )
+    except Exception:
+        logger.exception("Document extraction failed suffix=%s", suffix)
+        return DocumentExtractionResult(
+            pages=[], combined_text="", ocr_engine="Error",
+            detected_language="en", is_ocr_applied=False,
+            processing_status="failed", error_message="document-extraction-failed",
+        )
 
-    if suffix == ".pdf" or "pdf" in file_type.lower():
-        return process_pdf_document(file_path, language=lang)
-    elif suffix in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp") or "image" in file_type.lower():
-        return process_image_document(file_path, language=lang)
+
+def _detect_document_kind(file_path: Path, claimed_mime: str | None = None) -> str:
+    if not file_path.is_file():
+        raise ValueError("uploaded-file-not-found")
+    with file_path.open("rb") as source:
+        header = source.read(8192)
+    suffix = file_path.suffix.lower()
+    if b"%PDF-" in header[:1024]:
+        kind = "pdf"
+    elif zipfile.is_zipfile(file_path):
+        with zipfile.ZipFile(file_path) as package:
+            names = set(package.namelist())
+            if "[Content_Types].xml" not in names:
+                raise ValueError("invalid-office-package")
+            if "word/document.xml" in names:
+                kind = "docx"
+            elif "xl/workbook.xml" in names:
+                kind = "xlsx"
+            else:
+                raise ValueError("unsupported-zip-document")
     else:
-        # Fallback for plain text or unknown
         try:
-            content = file_path.read_text(encoding="utf-8", errors="ignore")
-            cleaned = clean_extracted_text(content)
-            det_lang, _, _ = detect_language(cleaned)
-            return DocumentExtractionResult(
-                pages=[
-                    ExtractedPage(
-                        page_number=1,
-                        text=cleaned,
-                        confidence=95.0,
-                        detected_language=det_lang,
+            with Image.open(file_path) as image:
+                image.verify()
+            kind = "image"
+        except Exception:
+            if suffix in {".txt", ".csv", ".md"}:
+                if b"\x00" in header:
+                    raise ValueError("binary-content-in-text-file")
+                kind = "text"
+            elif suffix in {".doc", ".xls"}:
+                raise ValueError("legacy-office-format-not-supported; save as DOCX/XLSX or PDF")
+            else:
+                raise ValueError("unsupported-or-unrecognized-file-format")
+
+    expected_mime = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text": "text/",
+        "image": "image/",
+    }[kind]
+    if claimed_mime and claimed_mime != "application/octet-stream":
+        matches = claimed_mime.startswith(expected_mime) if expected_mime.endswith("/") else claimed_mime == expected_mime
+        if not matches:
+            logger.warning("Upload MIME mismatch: signature detected %s, client declared %s", kind, claimed_mime)
+    return kind
+
+
+def _extract_plain_text(file_path: Path) -> DocumentExtractionResult:
+    try:
+        content = file_path.read_bytes().decode("utf-8-sig", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError("text-file-is-not-valid-UTF-8") from exc
+    raw_warnings = assess_ocr_text(content).warnings
+    cleaned = clean_extracted_text(content)
+    det_lang, _, _ = detect_language(cleaned)
+    return DocumentExtractionResult(
+        pages=[ExtractedPage(
+            page_number=1,
+            text=cleaned,
+            confidence=None,
+            detected_language=det_lang,
+            quality_warnings=raw_warnings,
+        )],
+        combined_text=cleaned,
+        ocr_engine="UTF-8 text extraction",
+        detected_language=det_lang,
+        is_ocr_applied=False,
+    )
+
+
+def _extract_docx(file_path: Path, language: str) -> DocumentExtractionResult:
+    from docx import Document as WordDocument
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    try:
+        document = WordDocument(str(file_path))
+    except Exception as exc:
+        raise ValueError("malformed-docx-package") from exc
+    parts: list[str] = []
+    table_number = 0
+    for child in document.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            paragraph = Paragraph(child, document)
+            value = clean_extracted_text(paragraph.text)
+            if value:
+                style = (paragraph.style.name or "") if paragraph.style else ""
+                parts.append(f"{style}: {value}" if style.lower().startswith("heading") else value)
+        elif child.tag == qn("w:tbl"):
+            table_number += 1
+            table = Table(child, document)
+            rows = [[clean_extracted_text(cell.text) for cell in row.cells] for row in table.rows]
+            rows = [row for row in rows if any(row)]
+            if not rows:
+                continue
+            parts.append(f"Table {table_number}:")
+            headers = rows[0]
+            parts.append("Headers: " + " | ".join(headers))
+            for row_number, row in enumerate(rows[1:], start=2):
+                cells = [
+                    f"{headers[index] or f'Column {index + 1}'}: {value}"
+                    for index, value in enumerate(row) if value
+                ]
+                if cells:
+                    parts.append(f"Row {row_number}: " + " | ".join(cells))
+
+    image_texts: list[str] = []
+    image_engines: set[str] = set()
+    image_warnings: list[str] = []
+    seen_images: set[str] = set()
+    for relationship in document.part.rels.values():
+        if not relationship.reltype.endswith("/image"):
+            continue
+        part = relationship.target_part
+        part_name = str(part.partname)
+        if part_name in seen_images:
+            continue
+        seen_images.add(part_name)
+        try:
+            image = Image.open(io.BytesIO(part.blob)).convert("RGB")
+            text, _, engine, _ = _perform_image_ocr(image, language=language)
+            assessment = assess_ocr_text(text)
+            if set(assessment.warnings) & SEVERE_TEXT_WARNINGS:
+                image_warnings.append("embedded-image-ocr-rejected")
+                continue
+            text = clean_extracted_text(text)
+            if text:
+                image_texts.append(text)
+                image_engines.add(engine)
+                logger.info("Embedded DOCX image OCR provider=%s", engine)
+        except Exception:
+            logger.exception("Embedded DOCX image OCR failed")
+    if image_texts:
+        parts.extend(["Embedded image text:", *image_texts])
+    full_text = "\n\n".join(part for part in parts if part).strip()
+    detected, _, _ = detect_language(full_text)
+    return DocumentExtractionResult(
+        pages=[ExtractedPage(page_number=1, text=full_text, confidence=None, detected_language=detected,
+                             notes=f"DOCX native extraction; {table_number} tables",
+                             quality_warnings=image_warnings)],
+        combined_text=full_text,
+        ocr_engine="python-docx" + (f"+{','.join(sorted(image_engines))}" if image_engines else ""),
+        detected_language=detected,
+        is_ocr_applied=bool(image_texts),
+    )
+
+
+def _extract_xlsx(file_path: Path, language: str) -> DocumentExtractionResult:
+    import openpyxl
+
+    try:
+        workbook = openpyxl.load_workbook(file_path, read_only=False, data_only=False)
+    except Exception as exc:
+        raise ValueError("malformed-xlsx-package") from exc
+    pages: list[ExtractedPage] = []
+    all_text: list[str] = []
+    image_engines: set[str] = set()
+    image_warnings: list[str] = []
+    try:
+        for sheet_number, worksheet in enumerate(workbook.worksheets, start=1):
+            lines = [f"Worksheet: {worksheet.title}"]
+            for row in worksheet.iter_rows():
+                values = [(cell.coordinate, str(cell.value).strip()) for cell in row if cell.value is not None]
+                if values:
+                    lines.append(" | ".join(f"{coordinate}: {value}" for coordinate, value in values))
+            for image in getattr(worksheet, "_images", []):
+                try:
+                    anchor = image.anchor._from
+                    location = f"{worksheet.cell(anchor.row + 1, anchor.col + 1).coordinate}"
+                    recognized, _, engine, _ = _perform_image_ocr(
+                        Image.open(io.BytesIO(image._data())).convert("RGB"), language=language
                     )
-                ],
-                combined_text=cleaned,
-                overall_ocr_confidence=95.0,
-                ocr_engine="DirectText",
-                detected_language=det_lang,
-                is_ocr_applied=False,
-            )
-        except Exception as e:
-            logger.error(f"Failed to extract fallback text from {file_path}: {e}")
-            return DocumentExtractionResult(
-                pages=[],
-                combined_text="",
-                overall_ocr_confidence=0.0,
-                ocr_engine="None",
-                detected_language="en",
-                is_ocr_applied=False,
-            )
+                    assessment = assess_ocr_text(recognized)
+                    if set(assessment.warnings) & SEVERE_TEXT_WARNINGS:
+                        image_warnings.append("embedded-image-ocr-rejected")
+                        continue
+                    recognized = clean_extracted_text(recognized)
+                    if recognized:
+                        lines.append(f"Embedded image at {location}: {recognized}")
+                        image_engines.add(engine)
+                        logger.info("Embedded XLSX image OCR provider=%s", engine)
+                except Exception:
+                    logger.exception("Embedded XLSX image OCR failed sheet=%s", worksheet.title)
+            text = "\n".join(lines).strip()
+            detected, _, _ = detect_language(text)
+            pages.append(ExtractedPage(
+                page_number=sheet_number,
+                text=text,
+                confidence=None,
+                detected_language=detected,
+                notes=f"worksheet:{worksheet.title}",
+                quality_warnings=list(image_warnings),
+            ))
+            all_text.append(text)
+    finally:
+        workbook.close()
+    combined = "\n\n".join(all_text).strip()
+    detected, _, _ = detect_language(combined)
+    return DocumentExtractionResult(
+        pages=pages,
+        combined_text=combined,
+        ocr_engine="openpyxl" + (f"+{','.join(sorted(image_engines))}" if image_engines else ""),
+        detected_language=detected,
+        is_ocr_applied=any("Embedded image at" in text for text in all_text),
+    )
+
+
+def _validate_extraction_result(result: DocumentExtractionResult) -> None:
+    warnings: list[str] = []
+    severe_detected = False
+    valid_text: list[str] = []
+    for page in result.pages:
+        if page.is_skipped:
+            continue
+        assessment = assess_ocr_text(page.text)
+        page_warnings = list(dict.fromkeys(page.quality_warnings + assessment.warnings))
+        page.quality_warnings = page_warnings
+        warnings.extend(page_warnings)
+        severe = set(page_warnings) & SEVERE_TEXT_WARNINGS
+        if severe:
+            logger.warning("Rejected suspicious extraction page=%s categories=%s", page.page_number, sorted(severe))
+            page.text = ""
+            severe_detected = True
+        elif page.text.strip():
+            valid_text.append(page.text.strip())
+    result.combined_text = "\n\n".join(valid_text).strip()
+    result.quality_warnings = list(dict.fromkeys(warnings))
+    if severe_detected:
+        result.processing_status = "needs_review"
+    elif warnings:
+        result.processing_status = "completed_with_warnings"
+    else:
+        result.processing_status = "completed"
+    if not result.combined_text:
+        result.processing_status = "failed"
+        result.error_message = result.error_message or "no-usable-text-extracted"
 

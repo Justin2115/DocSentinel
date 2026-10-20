@@ -20,8 +20,15 @@ ALLOWED_EXTENSIONS = {
     ".jpg",
     ".jpeg",
     ".png",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".webp",
     ".xlsx",
     ".xls",
+    ".txt",
+    ".csv",
+    ".md",
 }
 
 MAX_FILE_SIZE = 25 * 1024 * 1024

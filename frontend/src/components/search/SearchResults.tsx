@@ -10,7 +10,7 @@ export type SearchResultHit = {
 	score?: number | null;
 	similarity?: number;
 	match_type?: string;
-	chunk_index?: number;
+	chunk_index?: number | null;
 	highlight_terms?: string[];
 };
 
@@ -207,7 +207,7 @@ const SearchResults = ({
 									onOpenDocument(hit.document_id);
 									return;
 								}
-								navigate(`/library?preview=${hit.document_id}`);
+								navigate(`/library?preview=${hit.document_id}${hit.page_number ? `&page=${hit.page_number}` : ""}`);
 							}}
 						>
 							<div className="searchHitHeader">
@@ -220,7 +220,7 @@ const SearchResults = ({
 								</strong>
 								{hit.similarity != null && (
 									<span className="similarityBadge">
-										{Math.round(hit.similarity * 100)}% match
+										Vector similarity {hit.similarity.toFixed(2)}
 									</span>
 								)}
 							</div>

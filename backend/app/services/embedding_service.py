@@ -36,18 +36,53 @@ def chunk_text(
     if len(source) <= size:
         return [source]
 
+    units: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", source):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        if len(paragraph) <= size:
+            units.append(paragraph)
+            continue
+        sentences = re.split(r"(?<=[.!?।])\s+", paragraph)
+        for sentence in sentences:
+            if len(sentence) <= size:
+                units.append(sentence)
+                continue
+            words = sentence.split()
+            fragment = ""
+            for word in words:
+                if fragment and len(fragment) + len(word) + 1 > size:
+                    units.append(fragment)
+                    fragment = ""
+                if len(word) > size:
+                    if fragment:
+                        units.append(fragment)
+                        fragment = ""
+                    units.extend(word[i : i + size] for i in range(0, len(word), size))
+                else:
+                    fragment = f"{fragment} {word}".strip()
+            if fragment:
+                units.append(fragment)
+
     chunks: list[str] = []
-    start = 0
-    while start < len(source):
-        end = min(len(source), start + size)
-        chunk = source[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        if end >= len(source):
-            break
-        start = max(0, end - overlap_size)
-        if start >= end:
-            start = end
+    current = ""
+    for unit in units:
+        candidate = f"{current}\n\n{unit}" if current else unit
+        if len(candidate) <= size:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        overlap = current[-overlap_size:].lstrip() if overlap_size and current else ""
+        if overlap:
+            boundary = overlap.find(" ")
+            overlap = overlap[boundary + 1 :] if boundary >= 0 else overlap
+        current = f"{overlap}\n\n{unit}" if overlap else unit
+        if len(current) > size:
+            current = unit
+    if current:
+        chunks.append(current)
     return chunks
 
 
@@ -105,7 +140,7 @@ def schedule_document_indexing(document_id: int) -> None:
             document = db.query(Document).filter(Document.id == document_id).first()
             if document is None:
                 return
-            if count and document.status not in ("needs_review", "failed"):
+            if count and document.status not in ("needs_review", "completed_with_warnings", "failed"):
                 document.status = "indexed"
                 db.commit()
                 logger.info(
@@ -150,7 +185,7 @@ def reindex_pending_documents() -> int:
             count = index_document_embeddings(db, document.id)
             if count:
                 indexed += 1
-                if document.status not in ("needs_review", "failed"):
+                if document.status not in ("needs_review", "completed_with_warnings", "failed"):
                     document.status = "indexed"
                     db.commit()
                 logger.info(
@@ -232,9 +267,16 @@ def index_document_embeddings(db: Session, document_id: int) -> int:
     metadatas: list[dict] = []
     index_rows: list[EmbeddingIndex] = []
 
+    owner_id = document.uploaded_by
     for ocr, page in ocr_rows:
         page_number = page.page_number if page is not None else 1
         chunks = chunk_text(ocr.extracted_text or "")
+        try:
+            from app.services.ocr_service import detect_language
+
+            language = detect_language(ocr.extracted_text or "")[0]
+        except Exception:
+            language = "unknown"
         for chunk_index, chunk in enumerate(chunks):
             vector_id = _vector_id(document_id, page_number, chunk_index)
             ids.append(vector_id)
@@ -245,6 +287,14 @@ def index_document_embeddings(db: Session, document_id: int) -> int:
                     "page_number": page_number,
                     "chunk_index": chunk_index,
                     "filename": document.original_filename,
+                    "title": document.original_filename,
+                    "owner_id": owner_id if owner_id is not None else -1,
+                    "department": document.department or "",
+                    "document_type": document.document_type or "",
+                    "content_type": "page_text",
+                    "language": language,
+                    "chunking_version": "paragraph-v2",
+                    "index_version": settings.EMBEDDING_MODEL,
                     "text_preview": chunk[:200],
                 }
             )
@@ -257,19 +307,30 @@ def index_document_embeddings(db: Session, document_id: int) -> int:
                 )
             )
 
-    delete_document_embeddings(db, document_id)
-
     if not ids:
+        old_refs = [row.vector_db_ref for row in db.query(EmbeddingIndex).filter(EmbeddingIndex.document_id == document_id).all()]
+        if old_refs:
+            try:
+                get_collection().delete(ids=old_refs)
+            except Exception:
+                logger.exception("Could not remove old vectors for empty document %s", document_id)
+        db.query(EmbeddingIndex).filter(EmbeddingIndex.document_id == document_id).delete(synchronize_session=False)
         db.commit()
         return 0
 
     embeddings = encode_texts(documents)
-    get_collection().upsert(
+    collection = get_collection()
+    old_refs = [row.vector_db_ref for row in db.query(EmbeddingIndex).filter(EmbeddingIndex.document_id == document_id).all()]
+    collection.upsert(
         ids=ids,
         embeddings=embeddings,
         documents=documents,
         metadatas=metadatas,
     )
+    stale_refs = [ref for ref in old_refs if ref not in set(ids)]
+    if stale_refs:
+        collection.delete(ids=stale_refs)
+    db.query(EmbeddingIndex).filter(EmbeddingIndex.document_id == document_id).delete(synchronize_session=False)
     db.add_all(index_rows)
     db.commit()
     return len(ids)
@@ -280,9 +341,12 @@ def semantic_search(
     query: str,
     top_k: int | None = None,
     min_score: float = 0.2,
+    authorized_ids: list[int] | None = None,
 ) -> SemanticSearchResponse:
     term = (query or "").strip()
     if not term:
+        return SemanticSearchResponse(items=[], total=0, query=term)
+    if authorized_ids is not None and not authorized_ids:
         return SemanticSearchResponse(items=[], total=0, query=term)
 
     n_results = top_k or settings.SEMANTIC_TOP_K
@@ -295,10 +359,14 @@ def semantic_search(
         return SemanticSearchResponse(items=[], total=0, query=term)
 
     query_embedding = encode_texts([term])[0]
+    query_args = {}
+    if authorized_ids is not None:
+        query_args["where"] = {"document_id": {"$in": authorized_ids}}
     raw = collection.query(
         query_embeddings=[query_embedding],
         n_results=min(n_results, max(collection.count(), 1)),
         include=["metadatas", "distances", "documents"],
+        **query_args,
     )
 
     documents_out = (raw.get("documents") or [[]])[0]
@@ -306,18 +374,19 @@ def semantic_search(
     distances = (raw.get("distances") or [[]])[0]
 
     hits: list[SemanticSearchHit] = []
+    authorized_set = set(authorized_ids) if authorized_ids is not None else None
     for snippet, metadata, distance in zip(documents_out, metadatas, distances):
         similarity = max(0.0, min(1.0, 1.0 - float(distance)))
         if similarity < min_score:
             continue
         meta = metadata or {}
         document_id = int(meta.get("document_id", 0))
+        if authorized_set is not None and document_id not in authorized_set:
+            continue
         document = db.query(Document).filter(Document.id == document_id).first()
-        document_name = (
-            document.original_filename
-            if document is not None
-            else str(meta.get("filename") or "")
-        )
+        if document is None:
+            continue
+        document_name = document.original_filename
         hits.append(
             SemanticSearchHit(
                 document_id=document_id,

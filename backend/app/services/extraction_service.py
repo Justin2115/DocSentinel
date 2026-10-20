@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class ExtractedFieldData:
     field_name: str
     field_value: str
-    confidence: float
+    confidence: float | None
     page_number: int = 1
     original_value: str | None = None
     corrected_value: str | None = None
@@ -24,7 +24,7 @@ class DocumentExtractionReport:
     document_type: str
     department: str | None = None
     fields: list[ExtractedFieldData] = field(default_factory=list)
-    overall_confidence: float = 0.0
+    overall_confidence: float | None = None
     requires_review: bool = False
     review_reason: str | None = None
 
@@ -200,7 +200,8 @@ def extract_fields_from_text(
         if field_name in seen_field_names:
             continue
 
-        base_conf = rule["base_confidence"]
+        # These regex rules are not calibrated against labeled data. Keep the
+        # extracted value, but do not publish the legacy fixed score.
         for pattern in rule["patterns"]:
             match = re.search(pattern, text)
             if match:
@@ -222,18 +223,11 @@ def extract_fields_from_text(
 
 
                 if len(value) >= 2 and not value.isspace():
-                    # Calculate explainable confidence
-                    conf = base_conf
-                    # Length sanity adjustment
-                    if len(value) < 3 and field_name not in ("id", "state"):
-                        conf -= 10.0
-
-
                     extracted.append(
                         ExtractedFieldData(
                             field_name=field_name,
                             field_value=value,
-                            confidence=round(conf, 2),
+                            confidence=None,
                             page_number=page_number,
                             original_value=value,
                             corrected_value=value,
@@ -253,11 +247,11 @@ def extract_document_report(
     Main extraction pipeline:
     1. Classifies document type.
     2. Extracts fields across all pages.
-    3. Calculates overall document confidence.
+    3. Leaves calibrated document confidence unset until validated data exists.
     4. Evaluates if the document needs human review in the review queue.
     """
     combined_text = ocr_result.combined_text
-    department, doc_type, type_confidence = classify_document_category(combined_text)
+    department, doc_type, _type_score = classify_document_category(combined_text)
 
     all_fields: list[ExtractedFieldData] = []
     seen_field_keys: set[str] = set()
@@ -278,43 +272,23 @@ def extract_document_report(
             all_fields.append(f)
             seen_field_keys.add(f.field_name)
 
-    # Compute overall document confidence
-    # Weighted combination: 35% OCR confidence, 45% fields confidence, 20% document classification confidence
-    field_confidences = [f.confidence for f in all_fields]
-    avg_field_conf = (
-        sum(field_confidences) / len(field_confidences)
-        if field_confidences
-        else (ocr_result.overall_ocr_confidence or 50.0)
-    )
+    # OCR provider confidence describes recognition output only. It is not a
+    # field-extraction or document-correctness probability.
+    # The document's legacy overall_confidence field is intentionally left empty:
+    # provider recognition confidence is stored per OCR result and cannot stand in
+    # for field correctness or document-level confidence.
+    overall_conf = None
+    ocr_confidence = ocr_result.overall_ocr_confidence
+    requires_review = True
+    review_reasons = ["Document confidence is not calibrated; human verification required"]
 
-    overall_conf = (
-        0.35 * (ocr_result.overall_ocr_confidence or 50.0)
-        + 0.45 * avg_field_conf
-        + 0.20 * type_confidence
-    )
-    overall_conf = round(min(100.0, max(10.0, overall_conf)), 2)
-
-    # Review queue determination (Threshold = 75.0%)
-    requires_review = False
-    review_reasons = []
-
-    if overall_conf < 75.0:
+    if ocr_confidence is not None and ocr_confidence < 65.0:
         requires_review = True
-        review_reasons.append(f"Low overall confidence score ({overall_conf}%)")
-
-    if ocr_result.overall_ocr_confidence and ocr_result.overall_ocr_confidence < 65.0:
-        requires_review = True
-        review_reasons.append(f"Low OCR quality ({ocr_result.overall_ocr_confidence}%)")
+        review_reasons.append(f"Low provider OCR confidence ({ocr_confidence} on provider scale)")
 
     if not all_fields and len(combined_text) > 50:
         requires_review = True
         review_reasons.append("No structured fields could be confidently extracted")
-
-    # If any extracted field has very low confidence (< 60.0%)
-    low_conf_fields = [f.field_name for f in all_fields if f.confidence < 60.0]
-    if low_conf_fields:
-        requires_review = True
-        review_reasons.append(f"Low confidence on fields: {', '.join(low_conf_fields)}")
 
     final_reason = "; ".join(review_reasons) if review_reasons else None
 

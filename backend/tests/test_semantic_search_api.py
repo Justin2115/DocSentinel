@@ -4,15 +4,31 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.db.session import SessionLocal
 from app.main import app
+from app.core.dependencies import get_current_user
 from app.models.document import Document, DocumentPage, OCRResult
 from app.models.embedding import EmbeddingIndex
+from app.models.user import User
 from app.services.embedding_service import index_document_embeddings
 from tests.helpers import use_test_embeddings
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def authenticated_search_user():
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=0,
+        email="search-admin@example.test",
+        name="Search Admin",
+        role="ADMIN",
+        is_active=True,
+    )
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_semantic_search_api_english_and_hindi(tmp_path):
@@ -117,3 +133,28 @@ def test_keyword_search_api():
         db.query(Document).filter(Document.id == document.id).delete()
         db.commit()
         db.close()
+
+
+def test_search_requires_authentication():
+    app.dependency_overrides.pop(get_current_user, None)
+    try:
+        response = client.get("/api/search", params={"q": "private"})
+        assert response.status_code == 401
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: User(
+            id=0,
+            email="search-admin@example.test",
+            name="Search Admin",
+            role="ADMIN",
+            is_active=True,
+        )
+
+
+def test_search_returns_no_rows_for_empty_authorized_scope(monkeypatch):
+    from app.api import search as search_api
+
+    monkeypatch.setattr(search_api, "authorized_document_ids", lambda _db, _user: [])
+    response = client.get("/api/search", params={"q": "banana", "mode": "keyword"})
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert response.json()["total"] == 0

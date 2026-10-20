@@ -4,6 +4,8 @@ pydantic==2.13.4
 pydantic-settings==2.14.2
 pydantic_core==2.46.4
 SQLAlchemy==2.0.51
+# Persistent vector store used by semantic search.
+chromadb==1.5.9
 psycopg2-binary==2.9.12
 pymupdf==1.28.2
 rapidocr-onnxruntime==1.4.4
@@ -19,6 +21,10 @@ httpx==0.28.1
 paddlepaddle==3.0.0
 paddleocr==2.9.1
 scikit-image==0.26.0
+# Multilingual document and query embeddings.
+sentence-transformers==6.1.0
+python-docx==1.2.0
+openpyxl==3.1.5
 shapely==2.1.2
 pyclipper==1.4.0
 lmdb==2.3.0
@@ -26,4 +32,3 @@ imgaug==0.4.0
 RapidFuzz==3.14.5
 opencv-python==4.10.0.84
 setuptools==84.0.0
-
