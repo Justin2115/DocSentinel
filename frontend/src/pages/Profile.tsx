@@ -120,6 +120,7 @@ export default function Profile() {
               {editing ? (
                 <input
                   value={profile.name}
+                  aria-label="Full name"
                   onChange={(e) =>
                     setProfile({
                       ...profile,
@@ -142,6 +143,7 @@ export default function Profile() {
                 <input
                   type="email"
                   value={profile.email}
+                  aria-label="Email address"
                   onChange={(e) =>
                     setProfile({
                       ...profile,
@@ -163,6 +165,7 @@ export default function Profile() {
               {editing ? (
                 <input
                   value={profile.phone}
+                  aria-label="Phone number"
                   placeholder="Enter phone number"
                   onChange={(e) =>
                     setProfile({

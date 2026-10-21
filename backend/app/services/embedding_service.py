@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,6 +22,8 @@ _encode_override: EncodeFn | None = None
 _chroma_client = None
 _collection = None
 _collection_path: str | None = None
+_model_lock = threading.Lock()
+_collection_lock = threading.Lock()
 
 
 import unicodedata
@@ -35,6 +38,26 @@ def normalize_multilingual_text(text: str) -> str:
 
 
 _CONTENT_CHAR_RE = re.compile(r"[\w\u0900-\u097F\uA8E0-\uA8FF]")
+
+_NUMERIC_QUERY_RE = re.compile(r"^[\d\s.,\-/:$€£₹%()]+$")
+
+
+def is_numeric_only_query(text: str) -> bool:
+    """Return True if the query contains digits but no alphabetic/Indic characters.
+
+    Purely numeric queries (e.g. "20", "$1,200", "12-31-2024") do not carry
+    semantic meaning for embedding models and produce noisy false positives
+    against incidental numbers in unrelated documents. Keyword search handles
+    these reliably, so semantic retrieval should be skipped for them.
+    """
+    if not text:
+        return False
+    cleaned = text.strip()
+    if not cleaned:
+        return False
+    if not any(ch.isdigit() for ch in cleaned):
+        return False
+    return bool(_NUMERIC_QUERY_RE.match(cleaned))
 
 
 def has_meaningful_content(text: str) -> bool:
@@ -142,21 +165,43 @@ def persist_dir() -> str:
 def _get_model():
     global _model
     if _model is None:
-        from sentence_transformers import SentenceTransformer
+        with _model_lock:
+            if _model is None:
+                from app.services.pipeline_metrics import stage
 
-        logger.info("Loading embedding model %s", settings.EMBEDDING_MODEL)
-        try:
-            _model = SentenceTransformer(
-                settings.EMBEDDING_MODEL,
-                local_files_only=True,
-            )
-        except Exception:
-            logger.info(
-                "Embedding model not in local cache; downloading %s",
-                settings.EMBEDDING_MODEL,
-            )
-            _model = SentenceTransformer(settings.EMBEDDING_MODEL)
+                logger.info("Loading embedding model %s", settings.EMBEDDING_MODEL)
+                with stage("engine.embedding_init", model=settings.EMBEDDING_MODEL):
+                    from sentence_transformers import SentenceTransformer
+
+                    try:
+                        _model = SentenceTransformer(
+                            settings.EMBEDDING_MODEL,
+                            local_files_only=True,
+                        )
+                    except Exception:
+                        logger.info(
+                            "Embedding model not in local cache; downloading %s",
+                            settings.EMBEDDING_MODEL,
+                        )
+                        _model = SentenceTransformer(settings.EMBEDDING_MODEL)
     return _model
+
+
+def _apply_indexed_status(document: Document) -> None:
+    """Flip a document to 'indexed' only when indexing is a valid next state.
+
+    Documents awaiting or undergoing human review keep their review status so
+    semantic indexing never hides them from the review queue.
+    """
+    if (document.status or "").lower() in ("completed", "indexed", "uploaded"):
+        document.status = "indexed"
+
+
+_indexing_lock = threading.Lock()
+_indexing_in_flight: set[int] = set()
+
+# Statuses whose page set is not final yet, so they must not be embedded.
+_BACKFILL_EXCLUDED_STATUSES = ("failed", "processing")
 
 
 def schedule_document_indexing(document_id: int) -> None:
@@ -173,8 +218,8 @@ def schedule_document_indexing(document_id: int) -> None:
             document = db.query(Document).filter(Document.id == document_id).first()
             if document is None:
                 return
-            if count and document.status not in ("needs_review", "failed"):
-                document.status = "indexed"
+            if count:
+                _apply_indexed_status(document)
                 db.commit()
                 logger.info(
                     "Indexed document %s (%s chunks)",
@@ -189,38 +234,83 @@ def schedule_document_indexing(document_id: int) -> None:
         finally:
             db.close()
 
+    with _indexing_lock:
+        if document_id in _indexing_in_flight:
+            logger.info("Indexing already in flight for document %s", document_id)
+            return
+        _indexing_in_flight.add(document_id)
+
+    def _guarded_run() -> None:
+        try:
+            _run()
+        finally:
+            with _indexing_lock:
+                _indexing_in_flight.discard(document_id)
+
     threading.Thread(
-        target=_run,
+        target=_guarded_run,
         name=f"index-doc-{document_id}",
         daemon=True,
     ).start()
 
 
 def reindex_pending_documents() -> int:
-    """Index documents that have OCR text but no embedding_index rows."""
-    from sqlalchemy import exists
+    """Index documents that have OCR text but no embedding_index rows.
+
+    If the active vector collection is empty (for example after switching the
+    embedding model, which creates a new model-specific collection), reindex
+    every document that has OCR text. Otherwise documents indexed under a
+    previous model keep stale EmbeddingIndex rows pointing at a collection
+    that is no longer queried.
+
+    Failed and still-processing documents are excluded: their page set is
+    incomplete, so indexing them would put partial content into search.
+    """
+    from sqlalchemy import exists, func, or_
 
     from app.db.session import SessionLocal
     from app.models.document import Document, OCRResult
+    from app.services.pipeline_metrics import stage
+
+    settled = or_(
+        Document.status.is_(None),
+        func.lower(Document.status).notin_(_BACKFILL_EXCLUDED_STATUSES),
+    )
 
     db = SessionLocal()
     indexed = 0
     try:
-        documents = (
-            db.query(Document)
-            .filter(
-                exists().where(OCRResult.document_id == Document.id),
-                ~exists().where(EmbeddingIndex.document_id == Document.id),
+        collection = get_collection()
+        if collection.count() == 0:
+            documents = (
+                db.query(Document)
+                .filter(
+                    exists().where(OCRResult.document_id == Document.id),
+                    settled,
+                )
+                .all()
             )
-            .all()
-        )
+        else:
+            documents = (
+                db.query(Document)
+                .filter(
+                    exists().where(OCRResult.document_id == Document.id),
+                    ~exists().where(EmbeddingIndex.document_id == Document.id),
+                    settled,
+                )
+                .all()
+            )
         for document in documents:
-            count = index_document_embeddings(db, document.id)
+            with _indexing_lock:
+                if document.id in _indexing_in_flight:
+                    continue
+            with stage("index.backfill", document_id=document.id) as metrics:
+                count = index_document_embeddings(db, document.id)
+                metrics["chunks"] = count
             if count:
                 indexed += 1
-                if document.status not in ("needs_review", "failed"):
-                    document.status = "indexed"
-                    db.commit()
+                _apply_indexed_status(document)
+                db.commit()
                 logger.info(
                     "Backfilled embeddings for document %s (%s chunks)",
                     document.id,
@@ -254,9 +344,8 @@ def reindex_all_documents(db: Session, force: bool = False) -> int:
             count = index_document_embeddings(db, document.id)
             if count:
                 indexed += 1
-                if document.status not in ("needs_review", "failed"):
-                    document.status = "indexed"
-                    db.commit()
+                _apply_indexed_status(document)
+                db.commit()
                 logger.info(
                     "Reindexed document %s (%s chunks)",
                     document.id,
@@ -392,15 +481,22 @@ def index_document_embeddings(db: Session, document_id: int) -> int:
         db.commit()
         return 0
 
-    embeddings = encode_texts(documents)
-    get_collection().upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas,
-    )
-    db.add_all(index_rows)
-    db.commit()
+    from app.services.pipeline_metrics import stage
+
+    with stage("index.embed", document_id=document_id) as metrics:
+        embeddings = encode_texts(documents)
+        metrics["chunks"] = len(ids)
+    with stage("index.chroma_write", document_id=document_id) as metrics:
+        get_collection().upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+        )
+        metrics["chunks"] = len(ids)
+    with stage("index.db_write", document_id=document_id):
+        db.add_all(index_rows)
+        db.commit()
     return len(ids)
 
 
@@ -429,12 +525,23 @@ def semantic_search(
     db: Session,
     query: str,
     top_k: int | None = None,
-    min_score: float = 0.2,
+    min_score: float | None = None,
     user: Any | None = None,
     aggregate_by_document: bool = True,
+    document_ids: list[int] | None = None,
 ) -> SemanticSearchResponse:
+    if min_score is None:
+        # Calibrated floor; see settings.SEMANTIC_MIN_SCORE.
+        min_score = settings.SEMANTIC_MIN_SCORE
     term = normalize_multilingual_text(query or "")
     if not term:
+        return SemanticSearchResponse(items=[], total=0, query=term)
+
+    if is_numeric_only_query(term):
+        logger.info(
+            "Semantic search skipped for numeric-only query %r",
+            term,
+        )
         return SemanticSearchResponse(items=[], total=0, query=term)
 
     n_results = top_k or settings.SEMANTIC_TOP_K
@@ -452,14 +559,23 @@ def semantic_search(
         logger.exception("Failed to encode query %r", term)
         return SemanticSearchResponse(items=[], total=0, query=term)
 
+    # Scope is applied inside the vector query so out-of-scope chunks can never
+    # influence ranking, not only the post-filter.
+    where: dict[str, Any] | None = None
+    if document_ids:
+        where = {"document_id": {"$in": [int(value) for value in document_ids]}}
+
     # Fetch wider candidate pool so valid documents are not crowded out before filtering
     fetch_k = min(max(n_results * 5, 50), max(collection.count(), 1))
     try:
-        raw = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=fetch_k,
-            include=["metadatas", "distances", "documents"],
-        )
+        query_kwargs: dict[str, Any] = {
+            "query_embeddings": [query_embedding],
+            "n_results": fetch_k,
+            "include": ["metadatas", "distances", "documents"],
+        }
+        if where is not None:
+            query_kwargs["where"] = where
+        raw = collection.query(**query_kwargs)
     except Exception:
         logger.exception("Chroma vector query failed for query %r", term)
         return SemanticSearchResponse(items=[], total=0, query=term)

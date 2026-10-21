@@ -64,10 +64,12 @@ class Department(str, Enum):
 
 class DocumentStatus(str, Enum):
     UPLOADED = "UPLOADED"
+    PROCESSING = "PROCESSING"
     PENDING_REVIEW = "PENDING_REVIEW"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     NEEDS_REVISION = "NEEDS_REVISION"
+    COMPLETED = "COMPLETED"
 
     @classmethod
     def normalize(cls, status_str: str | None) -> str:
@@ -78,7 +80,7 @@ class DocumentStatus(str, Enum):
         # Handle legacy status values
         if upper in ("COMPLETED", "PROCESSED", "INDEXED"):
             return cls.APPROVED.value
-        if upper in ("NEEDS_REVIEW", "PENDING", "PROCESSING"):
+        if upper in ("NEEDS_REVIEW", "PENDING"):
             return cls.PENDING_REVIEW.value
         if upper in ("FAILED", "REJECTED"):
             return cls.REJECTED.value

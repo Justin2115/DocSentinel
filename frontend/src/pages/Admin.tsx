@@ -140,6 +140,7 @@ export default function Admin() {
 						"&:hover": { backgroundColor: "rgba(255, 255, 255, 0.1)" },
 					}}
 					title="Refresh User List"
+					aria-label="Refresh user list"
 				>
 					<RefreshIcon />
 				</IconButton>

@@ -1475,6 +1475,65 @@ tr:hover{
     font-size:20px;
 }
 
+.uploadSuccess, .uploadError, .uploadWarning, .uploadProcessing {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 16px 20px;
+    border-radius: 14px;
+    margin-top: 16px;
+    transition: all 0.2s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.uploadSuccess {
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.28);
+    color: #065f46;
+}
+
+:root.dark .uploadSuccess, body.dark-mode .uploadSuccess {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.35);
+    color: #34d399;
+}
+
+.uploadError {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.28);
+    color: #991b1b;
+}
+
+:root.dark .uploadError, body.dark-mode .uploadError {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #f87171;
+}
+
+.uploadWarning {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.28);
+    color: #92400e;
+}
+
+:root.dark .uploadWarning, body.dark-mode .uploadWarning {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.35);
+    color: #fbbf24;
+}
+
+.uploadProcessing {
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.28);
+    color: #1e40af;
+}
+
+:root.dark .uploadProcessing, body.dark-mode .uploadProcessing {
+    background: rgba(59, 130, 246, 0.12);
+    border-color: rgba(59, 130, 246, 0.35);
+    color: #60a5fa;
+}
+
 .uploadInfoGrid{
     display:grid;
     grid-template-columns:1.35fr 1fr;
@@ -1806,6 +1865,10 @@ body.previewOpen {
 
 .askQuestionHeader{
   margin-bottom:22px;
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
 }
 
 .askQuestionHeader h1{
@@ -1992,6 +2055,107 @@ body.previewOpen {
 .selectedDocument svg{
   font-size:16px;
   color:var(--primary);
+}
+
+.newConversationButton{
+  border:1px solid var(--border);
+  border-radius:8px;
+  background:#F5F7F6;
+  color:var(--text-secondary);
+  font-family:inherit;
+  font-size:12px;
+  padding:6px 10px;
+  cursor:pointer;
+  transition:.2s;
+  white-space:nowrap;
+}
+
+.newConversationButton:hover:not(:disabled){
+  border-color:var(--primary);
+  color:var(--primary);
+}
+
+.newConversationButton:disabled{
+  opacity:.5;
+  cursor:default;
+}
+
+.attachmentStrip{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:7px;
+  margin-bottom:9px;
+}
+
+.attachmentCard{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  max-width:280px;
+  min-width:0;
+  padding:5px 6px 5px 9px;
+  border:1px solid var(--border);
+  border-radius:9px;
+  background:#F5F7F6;
+  color:var(--text-secondary);
+  font-size:11px;
+}
+
+.attachmentCard svg{
+  font-size:15px;
+  color:var(--primary);
+  flex-shrink:0;
+}
+
+.attachmentName{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--text);
+  font-weight:600;
+}
+
+.attachmentType,
+.attachmentStatus{
+  border:1px solid var(--border);
+  border-radius:5px;
+  padding:1px 5px;
+  background:white;
+  font-size:9px;
+  letter-spacing:.03em;
+  white-space:nowrap;
+}
+
+.attachmentType{
+  text-transform:uppercase;
+}
+
+.attachmentMore{
+  font-size:11px;
+  color:var(--text-secondary);
+}
+
+.attachmentRemove{
+  display:flex;
+  align-items:center;
+  border:none;
+  background:transparent;
+  color:var(--text-secondary);
+  cursor:pointer;
+  padding:2px;
+  border-radius:5px;
+  flex-shrink:0;
+}
+
+.attachmentRemove:hover{
+  background:rgba(11,122,92,.1);
+  color:var(--primary);
+}
+
+.attachmentRemove svg{
+  font-size:13px;
+  color:inherit;
 }
 
 .questionInputWrapper{
@@ -6286,6 +6450,64 @@ body {
     overflow-wrap: anywhere;
 }
 
+/* Tables the reader measured, drawn with their real rows, columns and spans. */
+.ocrTables {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 4px 0 10px;
+}
+
+.ocrTable {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    background: var(--surface);
+}
+
+.ocrTable caption {
+    caption-side: top;
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-style: italic;
+    padding: 0 0 6px;
+}
+
+.ocrTable .ocrTableNote {
+    border: none;
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-style: italic;
+    padding: 6px 0 0;
+}
+
+.ocrTable th,
+.ocrTable td {
+    border: 1px solid var(--border);
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.ocrTable th {
+    font-weight: 700;
+    background: rgba(148, 163, 184, 0.12);
+}
+
+/* A cell the reader could not resolve: drawn, but never filled in. */
+.ocrTable td.ocrCellUncertain {
+    color: var(--text-secondary);
+    background: rgba(245, 158, 11, 0.14);
+    font-style: italic;
+}
+
+.ocrTable td.ocrCellEmpty {
+    background: rgba(148, 163, 184, 0.06);
+}
+
 @media (max-width: 600px) {
     .previewDetails {
         grid-template-columns: 1fr;
@@ -6417,9 +6639,14 @@ body {
     text-align: left;
     border: 1px solid var(--border);
     border-radius: 12px;
-    background: #fff;
+    background: var(--surface);
+    color: var(--text-primary);
     padding: 12px;
     cursor: pointer;
+}
+
+.sourceCard:hover {
+    border-color: var(--primary);
 }
 
 .sourceCardHeader {
@@ -6442,6 +6669,204 @@ body {
     line-height: 1.5;
 }
 
+/* Why each passage was allowed into the answer, shown on the citation itself. */
+.sourceCardMetaRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0 8px;
+}
+
+.sourceCardMetaRow .sourceCardMeta {
+    display: inline;
+    margin: 0;
+}
+
+.sourceCardKind,
+.sourceCardSupport {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-secondary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+}
+
+.sourceCardWarning {
+    border-radius: 999px;
+    background: rgba(249, 115, 22, 0.16);
+    color: var(--warning);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+}
+
+.sourceCardColumns {
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    margin: 0 0 6px;
+}
+
+/* Multi-document scope picker. */
+.docSelector {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    padding: 10px;
+}
+
+.docSelectorBar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.docSelectorSearch {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+    padding: 7px 10px;
+}
+
+.docSelectorAction,
+.docSelectorDone {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 10px;
+    cursor: pointer;
+}
+
+.docSelectorAction:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.docSelectorDone {
+    border-color: transparent;
+    background: var(--primary-light);
+    color: var(--primary);
+}
+
+.docSelectorList {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.docSelectorItem {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 8px;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 6px 8px;
+}
+
+.docSelectorItem:hover {
+    background: var(--surface-secondary);
+}
+
+.docSelectorItem:focus-within {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+
+.docSelectorItem input {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.docSelectorName {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.docSelectorMeta {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.docSelectorNote {
+    color: var(--text-secondary);
+    font-size: 12px;
+    margin: 4px 2px;
+}
+
+.docSelectorFooter {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-top: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding-top: 8px;
+}
+
+.attachButton[aria-expanded="true"] {
+    background: var(--primary-light);
+    color: var(--primary);
+}
+
+.scopeClear {
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: underline;
+}
+
+/* The page a citation pointed at, inside the document viewer. */
+.ocrResultFocus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+.answerEngine {
+    align-self: flex-start;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-secondary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 9px;
+}
+
+.previewFocusMiss {
+    border-radius: 8px;
+    background: var(--surface-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    margin: 0 0 8px;
+    padding: 8px 10px;
+}
+
 .statusBadge.indexed {
     background: #ecfdf3;
     color: #067647;
@@ -6450,4 +6875,61 @@ body {
 .statusBadge.failed {
     background: #fef3f2;
     color: #b42318;
+}
+/* ===================== ACCESSIBILITY PASS ===================== */
+
+/* Present to assistive technology, invisible on screen. */
+.srOnly {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* One focus ring for every control. :focus-visible keeps pointer clicks as they
+   were and only marks keyboard focus, which is what tabbing through the app
+   needs to see. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+mark.ocrHighlight {
+    background: #fef0c7;
+    border-radius: 3px;
+    color: #854d0e;
+    padding: 0 2px;
+}
+
+.answerNotes {
+    align-self: flex-start;
+    color: #475467;
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 4px;
+    max-width: 72ch;
+}
+
+.followUpButton {
+    align-self: flex-start;
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    margin-top: 6px;
+    padding: 4px 12px;
+}
+
+.followUpButton:hover {
+    border-style: solid;
+    color: var(--primary);
 }

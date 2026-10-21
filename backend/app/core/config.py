@@ -19,10 +19,23 @@ class Settings(BaseSettings):
     CHROMA_PERSIST_DIR: str = "vector_db/chroma"
     # Smaller multilingual model so indexing can finish locally.
     # bge-m3 is stronger but a multi-GB download that blocked search.
-    EMBEDDING_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     CHUNK_SIZE: int = 512
     CHUNK_OVERLAP: int = 64
     SEMANTIC_TOP_K: int = 10
+    # Calibrated on a labeled query set (10 relevant / 12 hard-negative queries)
+    # against production chunks with all-MiniLM-L6-v2: worst hard-negative
+    # cosine similarity was 0.252, relevant median 0.459. 0.30 gave
+    # precision 1.00 / recall 0.80; lower values admitted the 0.25-0.30
+    # false-positive band. This is a retrieval relevance score, not an
+    # accuracy probability.
+    SEMANTIC_MIN_SCORE: float = 0.30
+
+    # PP-Structure table recognition for scanned pages with ruled lines.
+    # Benchmarked: 27/27 vs 11/27 cells on English numeric tables, +~10s/page,
+    # ~20MB cached models. Disable to revert to text-only scanned pages.
+    SCANNED_TABLE_EXTRACTION: bool = True
 
     # Authentication & Security
     JWT_SECRET: str = "docsentinel-secure-jwt-secret-key-32bytes-or-more"
@@ -36,6 +49,33 @@ class Settings(BaseSettings):
 
     # Frontend URL for OAuth redirects & CORS
     FRONTEND_URL: str = "http://localhost:5173"
+
+    # Watchdog budget for one document's processing run, in seconds. Normal
+    # documents finish well inside 10 minutes; this is deliberately looser so a
+    # legitimately slow multi-page scan is never abandoned mid-run. Only
+    # documents no worker in this process owns are reported as stalled.
+    PROCESSING_TIMEOUT_SECONDS: int = 900
+
+    # Persistent log sink. Background OCR/indexing dies with the server, so
+    # stage timings and failures must survive a restart to be diagnosable.
+    # Relative to backend/; empty string keeps stderr-only logging.
+    LOG_FILE: str = "logs/backend.log"
+
+    # Local Ollama RAG provider. Nothing is sent off this machine: the base URL
+    # is expected to be a loopback address, and the model must already be
+    # installed (no automatic downloads). Left disabled when OLLAMA_MODEL is
+    # empty, so the chatbot stays on deterministic extractive answers.
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
+    OLLAMA_MODEL: str = ""
+    OLLAMA_ENABLED: bool = True
+    # Connect/keepalive budget for the availability probe, in seconds.
+    OLLAMA_CONNECT_TIMEOUT: float = 2.0
+    # Generation budget. A 3B local model needs this much on CPU only
+    # occasionally, so the request is abandoned rather than left hanging.
+    OLLAMA_GENERATE_TIMEOUT: float = 90.0
+    # Restrict the prompt window; the evidence block is trimmed to fit.
+    OLLAMA_NUM_CTX: int = 4096
+    OLLAMA_MAX_NEW_TOKENS: int = 320
 
     # Default Admin initialization
     DEFAULT_ADMIN_EMAIL: str = "admin@docsentinel.local"

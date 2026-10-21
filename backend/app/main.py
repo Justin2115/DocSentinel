@@ -1,4 +1,6 @@
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,12 +14,50 @@ from app.api.documents import router as documents_router
 from app.api.query import router as query_router
 from app.api.search import router as search_router
 
-from app.core.config import settings
+from app.core.config import BASE_DIR, settings
 from app.db.base import Base
 import app.models.document
 import app.models.embedding
 import app.models.user
 from app.services.auth_service import init_default_admin
+
+
+def _configure_file_logging() -> None:
+    """Mirror the pipeline logs to a rotating file so they outlive the process.
+
+    OCR and indexing run in daemon threads: when the server stops, anything only
+    printed to stderr is lost, which is what made the un-indexed documents
+    undiagnosable after the fact.
+
+    The handler goes on the "app" and "docsentinel" logger trees, not the root
+    logger. PaddlePaddle replaces the root handlers when it imports, and
+    uvicorn's dictConfig does the same at startup, so a root-attached file
+    handler stops writing precisely when OCR begins.
+    """
+    if not settings.LOG_FILE:
+        return
+    try:
+        path = Path(settings.LOG_FILE)
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            path, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        for name in ("app", "docsentinel"):
+            logger_ = logging.getLogger(name)
+            if handler not in logger_.handlers:
+                logger_.addHandler(handler)
+            if logger_.level == logging.NOTSET or logger_.level > logging.INFO:
+                logger_.setLevel(logging.INFO)
+    except Exception as exc:  # never let logging setup stop the API
+        logging.warning("File logging disabled: %s", exc)
+
+
+_configure_file_logging()
 
 app = FastAPI(
     title="DocSentinel API",
@@ -51,11 +91,30 @@ app.include_router(query_router)
 
 
 
+def run_startup_recovery() -> dict:
+    """Backfill missing embeddings, then retry documents interrupted by a shutdown.
+
+    Returns counts for logging and tests. Both steps read persisted state first
+    and only touch work that is actually missing, so a restart never reprocesses
+    a document that already has valid output.
+    """
+    from app.api.documents import requeue_interrupted_documents
+    from app.services.embedding_service import reindex_pending_documents
+    from app.services.pipeline_metrics import stage
+
+    result: dict[str, int] = {}
+    with stage("recovery.backfill_embeddings") as metrics:
+        result["backfilled"] = reindex_pending_documents()
+        metrics["documents"] = result["backfilled"]
+    with stage("recovery.requeue_interrupted") as metrics:
+        result["requeued"] = requeue_interrupted_documents()
+        metrics["documents"] = result["requeued"]
+    return result
+
+
 @app.on_event("startup")
 def initialize_database() -> None:
     import threading
-
-    from app.services.embedding_service import reindex_pending_documents
 
     engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
     Base.metadata.create_all(engine)
@@ -92,6 +151,7 @@ def initialize_database() -> None:
                 ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS can_upload BOOLEAN DEFAULT TRUE;
                 ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS can_review BOOLEAN DEFAULT TRUE;
                 ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+                ALTER TABLE ocr_results ADD COLUMN IF NOT EXISTS raw_text TEXT;
                 DO $$ BEGIN
                     IF NOT EXISTS (
                         SELECT 1 FROM pg_constraint WHERE conname = 'uq_folder_permission_folder_role'
@@ -119,9 +179,12 @@ def initialize_database() -> None:
             logging.exception("Failed to initialize default settings and permissions: %s", e)
 
 
-    # Background embedding reindex thread
+    # Recovery for work left behind by a previous shutdown: documents that have
+    # OCR text but no embeddings, then documents still stuck in PROCESSING.
+    # Sequential in one thread so a backfill and a re-OCR never compete for CPU
+    # and torch loads before Paddle (importing torch afterwards fails on Windows).
     threading.Thread(
-        target=reindex_pending_documents,
-        name="reindex-pending-embeddings",
+        target=run_startup_recovery,
+        name="docsentinel-startup-recovery",
         daemon=True,
     ).start()

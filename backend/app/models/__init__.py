@@ -2,6 +2,7 @@ from app.models.document import (
     Document,
     DocumentPage,
     ExtractedField,
+    ExtractedTable,
     OCRResult,
     ReviewQueue,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "DocumentPage",
     "OCRResult",
     "ExtractedField",
+    "ExtractedTable",
     "ReviewQueue",
     "User",
     "FolderPermission",

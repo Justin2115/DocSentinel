@@ -30,8 +30,16 @@ import {
   rejectDocument,
   requestDocumentRevision,
 } from "../api/document";
-import type { DocumentDetail } from "../api/document";
+import type { DocumentDetail, OCRResult } from "../api/document";
 import { useAuth } from "../context/AuthContext";
+import {
+  CONFIDENCE_EXPLANATIONS,
+  formatConfidence,
+} from "../utils/confidence";
+import {
+  PageStructuredTables,
+  stripTableBlocks,
+} from "../components/tables/StructuredTables";
 
 export default function ReviewQueue() {
   const { user: currentUser } = useAuth();
@@ -73,13 +81,30 @@ export default function ReviewQueue() {
     fetchQueue();
   }, []);
 
+  // The threshold slider keeps the documents a reviewer most needs to look at.
+  // An unmeasured score is unknown quality, so it stays in the queue rather
+  // than being counted as a confident document.
   const visibleDocuments = documents.filter((doc) => {
-    const conf = doc.overall_confidence ?? 100;
+    const conf = doc.overall_confidence ?? 0;
     return conf <= threshold;
   });
 
   const activeDoc: DocumentDetail | null =
     visibleDocuments[selectedDocumentIndex] || null;
+
+  const ocrPageNumber = (result: OCRResult): number | null =>
+    activeDoc?.pages?.find((page) => page.id === result.page_id)?.page_number ??
+    null;
+
+  // Why the pipeline queued this document (low measured confidence, failed
+  // pages, a stalled run). Read from the review queue rows the server writes.
+  const reviewReasons = Array.from(
+    new Set(
+      (activeDoc?.review_items ?? [])
+        .map((item) => (item.reason || "").trim())
+        .filter((reason) => reason.length > 0)
+    )
+  );
 
   // Separation of duties check
   const isOwnDocument = Boolean(
@@ -191,6 +216,7 @@ export default function ReviewQueue() {
               min="50"
               max="100"
               value={threshold}
+              aria-label="Filter documents by maximum confidence"
               onChange={(event) => setThreshold(Number(event.target.value))}
             />
             <strong>{threshold}%</strong>
@@ -205,6 +231,7 @@ export default function ReviewQueue() {
               "&:hover": { backgroundColor: "rgba(255, 255, 255, 0.1)" },
             }}
             title="Refresh Review Queue"
+            aria-label="Refresh review queue"
           >
             <RefreshIcon />
           </IconButton>
@@ -243,7 +270,6 @@ export default function ReviewQueue() {
               </div>
             ) : (
               visibleDocuments.map((item, index) => {
-                const conf = Math.round(item.overall_confidence ?? 85);
                 const isSelected = selectedDocumentIndex === index;
                 const isItemOwn =
                   currentUser && item.uploaded_by === currentUser.id;
@@ -286,7 +312,12 @@ export default function ReviewQueue() {
                           }}
                         />
                       )}
-                      <span className="reviewConfidence">{conf}%</span>
+                      <span
+                        className="reviewConfidence"
+                        title={CONFIDENCE_EXPLANATIONS.document}
+                      >
+                        {formatConfidence(item.overall_confidence)}
+                      </span>
                     </div>
                   </button>
                 );
@@ -377,11 +408,58 @@ export default function ReviewQueue() {
                       }}
                     >
                       {activeDoc.ocr_results && activeDoc.ocr_results.length > 0 ? (
-                        activeDoc.ocr_results.map((res, i) => (
-                          <div key={res.id || i} style={{ marginBottom: "12px" }}>
-                            {res.extracted_text || "(No text detected on this page)"}
-                          </div>
-                        ))
+                        [...activeDoc.ocr_results]
+                          .sort(
+                            (a, b) =>
+                              (ocrPageNumber(a) ?? 0) - (ocrPageNumber(b) ?? 0)
+                          )
+                          .map((res, i) => {
+                            const pageNumber = ocrPageNumber(res);
+                            const measured =
+                              typeof res.confidence === "number" &&
+                              Number.isFinite(res.confidence);
+                            const failed = (res.ocr_engine || "").includes("Failed");
+                            const pageTables = (activeDoc.extracted_tables || []).filter(
+                              (table) =>
+                                pageNumber != null && table.page_number === pageNumber
+                            );
+                            // Rows the reader measured are drawn as a table; the raw
+                            // "cell | cell" copy of them is not shown twice. With no
+                            // structure for the page, the raw text is the fallback.
+                            const rawText =
+                              res.extracted_text ||
+                              (failed
+                                ? "OCR failed on this page: no text was recovered."
+                                : "(No text detected on this page)");
+                            const prose = pageTables.length
+                              ? stripTableBlocks(rawText)
+                              : rawText;
+
+                            return (
+                              <div key={res.id || i} style={{ marginBottom: "12px" }}>
+                                <div
+                                  title={CONFIDENCE_EXPLANATIONS.page}
+                                  style={{
+                                    color: "#94a3b8",
+                                    fontSize: "0.75rem",
+                                    marginBottom: 4,
+                                  }}
+                                >
+                                  {pageNumber ? `Page ${pageNumber}` : "Whole document"}
+                                  {res.ocr_engine ? ` · ${res.ocr_engine}` : ""}
+                                  {` · ${
+                                    measured
+                                      ? `${formatConfidence(res.confidence)} word confidence`
+                                      : "word confidence not measured"
+                                  }`}
+                                </div>
+                                {pageTables.length > 0 && (
+                                  <PageStructuredTables tables={pageTables} />
+                                )}
+                                {prose ? prose : null}
+                              </div>
+                            );
+                          })
                       ) : (
                         <div style={{ color: "#94a3b8", fontStyle: "italic" }}>
                           No OCR text extracted for this document.
@@ -410,11 +488,42 @@ export default function ReviewQueue() {
                     <p>Review AI-extracted fields and make authorization decisions.</p>
                   </div>
 
-                  <div className="overallConfidence">
-                    <span>Overall confidence</span>
-                    <strong>{Math.round(activeDoc.overall_confidence ?? 85)}%</strong>
+                  <div
+                    className="overallConfidence"
+                    title={CONFIDENCE_EXPLANATIONS.document}
+                  >
+                    <span>Overall quality score</span>
+                    <strong>
+                      {formatConfidence(activeDoc.overall_confidence)}
+                    </strong>
                   </div>
                 </div>
+
+                {/* Why this document is in the queue */}
+                {reviewReasons.length > 0 && (
+                  <Alert
+                    severity="warning"
+                    icon={<WarningAmberIcon />}
+                    sx={{
+                      m: 2,
+                      mb: 0,
+                      borderRadius: "10px",
+                      fontSize: "0.8rem",
+                      bgcolor: "rgba(56, 189, 248, 0.12)",
+                      border: "1px solid rgba(56, 189, 248, 0.3)",
+                      color: "#7dd3fc",
+                    }}
+                  >
+                    <div>
+                      <strong>Why this needs review</strong>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                        {reviewReasons.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </Alert>
+                )}
 
                 {/* Separation of Duties Warning */}
                 {isOwnDocument && (
@@ -440,35 +549,58 @@ export default function ReviewQueue() {
                     <div className="extractedField">
                       <div className="extractedFieldHeader">
                         <label>Department</label>
-                        <span className="fieldConfidence">{activeDoc.department ? "100%" : "Auto"}</span>
+                        {/* A chosen department is a fact, not a score; only
+                            auto-detected ones carry any uncertainty. */}
+                        <span className="fieldConfidence">
+                          {activeDoc.department ? "specified" : "auto-detected"}
+                        </span>
                       </div>
-                      <input type="text" readOnly value={activeDoc.department || "Not specified"} />
+                      <input type="text" readOnly value={activeDoc.department || "Not specified"} aria-label="Department" />
                     </div>
 
                     <div className="extractedField">
                       <div className="extractedFieldHeader">
                         <label>Document Type</label>
-                        <span className="fieldConfidence">{Math.round(activeDoc.overall_confidence ?? 85)}%</span>
+                        <span
+                          className="fieldConfidence"
+                          title="Classification confidence is not stored per document, so the overall quality score is shown instead."
+                        >
+                          {formatConfidence(activeDoc.overall_confidence)}
+                        </span>
                       </div>
-                      <input type="text" readOnly value={activeDoc.document_type || "General Document"} />
+                      <input type="text" readOnly value={activeDoc.document_type || "General Document"} aria-label="Document type" />
                     </div>
 
                     {activeDoc.extracted_fields && activeDoc.extracted_fields.length > 0 ? (
                       activeDoc.extracted_fields.map((field) => {
-                        const conf = Math.round(field.confidence ?? 80);
+                        const strength =
+                          typeof field.confidence === "number" &&
+                          Number.isFinite(field.confidence)
+                            ? Math.round(field.confidence)
+                            : null;
                         return (
                           <div className="extractedField" key={field.id || field.field_name}>
                             <div className="extractedFieldHeader">
                               <label>{field.field_name}</label>
-                              <span className={conf < 70 ? "fieldConfidence low" : "fieldConfidence"}>
-                                {conf}%
+                              <span
+                                className={
+                                  strength !== null && strength < 70
+                                    ? "fieldConfidence low"
+                                    : "fieldConfidence"
+                                }
+                                title={CONFIDENCE_EXPLANATIONS.field}
+                              >
+                                {formatConfidence(field.confidence)}
                               </span>
                             </div>
-                            <input type="text" defaultValue={field.field_value || ""} />
-                            <div className="fieldConfidenceBar">
+                            <input type="text" defaultValue={field.field_value || ""} aria-label={`${field.field_name} extracted value`} />
+                            <div
+                              className="fieldConfidenceBar"
+                              title={CONFIDENCE_EXPLANATIONS.field}
+                            >
                               <div
                                 className="fieldConfidenceFill"
-                                style={{ width: `${conf}%` }}
+                                style={{ width: `${strength ?? 0}%` }}
                               />
                             </div>
                           </div>

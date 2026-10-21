@@ -3,7 +3,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.embedding_service import chunk_text, semantic_search
+from app.services.embedding_service import (
+    chunk_text,
+    is_numeric_only_query,
+    reindex_pending_documents,
+    semantic_search,
+)
 from app.db.session import SessionLocal
 from app.models.document import Document, DocumentPage, OCRResult
 from app.models.embedding import EmbeddingIndex
@@ -83,3 +88,130 @@ def test_dummy_encode_is_deterministic():
     second = dummy_encode(["hello world"])
     assert first == second
     assert len(first[0]) == 32
+
+
+def test_reindex_pending_documents_reindexes_when_collection_empty(tmp_path):
+    """Regression: reindex_pending_documents must reindex OCR-bearing documents when the active collection is empty.
+
+    After an embedding-model switch the model-specific collection is empty
+    while documents still carry stale EmbeddingIndex rows from the previous
+    model. reindex_pending_documents must detect the empty collection and
+    rebuild vectors for all OCR-bearing documents.
+    """
+    use_test_embeddings(tmp_path)
+    db = SessionLocal()
+    document = Document(
+        original_filename="reindex_pending.pdf",
+        stored_filename="reindex_pending.pdf",
+        file_path="uploads/reindex_pending.pdf",
+        file_type="application/pdf",
+        status="completed",
+    )
+    try:
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+        page = DocumentPage(document_id=document.id, page_number=1)
+        db.add(page)
+        db.flush()
+        db.add(
+            OCRResult(
+                document_id=document.id,
+                page_id=page.id,
+                extracted_text="The vendor must submit the unpaid invoice before Friday.",
+            )
+        )
+        db.commit()
+
+        # Index once so EmbeddingIndex rows exist (simulating a prior model's index).
+        index_document_embeddings(db, document.id)
+
+        # Wipe the vector collection to simulate a model switch that created
+        # a new empty collection while stale EmbeddingIndex rows remain.
+        from app.services.embedding_service import get_collection, delete_document_embeddings
+        delete_document_embeddings(db, document.id)
+        # Re-create stale rows to simulate the pre-switch state.
+        from app.models.embedding import EmbeddingIndex
+        db.add(EmbeddingIndex(
+            document_id=document.id,
+            page_number=1,
+            chunk_index=0,
+            vector_db_ref="doc-stale-ref",
+        ))
+        db.commit()
+
+        assert get_collection().count() == 0
+
+        reindexed = reindex_pending_documents()
+        assert reindexed >= 1
+        assert get_collection().count() >= 1
+    finally:
+        from app.services.embedding_service import delete_document_embeddings, reset_chroma_client, set_encode_override
+        delete_document_embeddings(db, document.id)
+        db.query(OCRResult).filter(OCRResult.document_id == document.id).delete()
+        db.query(DocumentPage).filter(DocumentPage.document_id == document.id).delete()
+        db.query(Document).filter(Document.id == document.id).delete()
+        db.commit()
+        db.close()
+        set_encode_override(None)
+        reset_chroma_client()
+
+
+def test_is_numeric_only_query_detects_pure_numeric_input():
+    """Numeric-only queries (digits, currency, punctuation) have no semantic
+    meaning for embedding models and should be detected so semantic retrieval
+    is skipped in favor of keyword search."""
+    assert is_numeric_only_query("20") is True
+    assert is_numeric_only_query("$1,200") is True
+    assert is_numeric_only_query("12-31-2024") is True
+    assert is_numeric_only_query("93.50") is True
+    assert is_numeric_only_query("  42  ") is True
+    # Queries with alphabetic characters must NOT be treated as numeric-only.
+    assert is_numeric_only_query("invoice 20") is False
+    assert is_numeric_only_query("self care") is False
+    assert is_numeric_only_query("INV-3337") is False
+    assert is_numeric_only_query("") is False
+
+
+def test_semantic_search_returns_empty_for_numeric_only_query(tmp_path):
+    """Semantic search must not return noisy false positives for a purely
+    numeric query such as '20'.  Keyword search is the correct channel for
+    exact numeric lookups."""
+    use_test_embeddings(tmp_path)
+    db = SessionLocal()
+    document = Document(
+        original_filename="numeric_noise.pdf",
+        stored_filename="numeric_noise.pdf",
+        file_path="uploads/numeric_noise.pdf",
+        file_type="application/pdf",
+        status="completed",
+    )
+    try:
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+        page = DocumentPage(document_id=document.id, page_number=1)
+        db.add(page)
+        db.flush()
+        db.add(
+            OCRResult(
+                document_id=document.id,
+                page_id=page.id,
+                extracted_text="The meeting is on page 20 of the quarterly report.",
+            )
+        )
+        db.commit()
+        index_document_embeddings(db, document.id)
+
+        result = semantic_search(db, "20", top_k=5, min_score=0.0)
+        assert result.total == 0
+    finally:
+        from app.services.embedding_service import delete_document_embeddings, reset_chroma_client, set_encode_override
+        delete_document_embeddings(db, document.id)
+        db.query(OCRResult).filter(OCRResult.document_id == document.id).delete()
+        db.query(DocumentPage).filter(DocumentPage.document_id == document.id).delete()
+        db.query(Document).filter(Document.id == document.id).delete()
+        db.commit()
+        db.close()
+        set_encode_override(None)
+        reset_chroma_client()

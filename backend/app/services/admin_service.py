@@ -402,7 +402,12 @@ def evaluate_document_routing(
     Check if a document triggers auto-flagging and determine routing note.
     Returns: (requires_review, review_reason, route_to)
     """
+    # Ensure confidence is a number; treat None as 0.0 (very low confidence)
+    if confidence is None:
+        confidence = 0.0
     threshold = get_active_confidence_threshold(db)
+    # Low confidence always needs a human, whether or not the type was resolved:
+    # a classified document can still be unreadable.
     requires_review = confidence < threshold
     route_to = None
     reason = None

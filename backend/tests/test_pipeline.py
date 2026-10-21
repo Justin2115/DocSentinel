@@ -102,6 +102,14 @@ def create_scanned_pdf(lines_per_page: list[list[str]]) -> io.BytesIO:
 
 
 
+import pytest
+
+if __name__ != "__main__":
+    pytest.skip(
+        "Standalone live integration script; run directly with python test_pipeline.py",
+        allow_module_level=True,
+    )
+
 print("==================================================")
 print("TEST 1: English Multi-page PDF (Regression Test - No Language Parameter)")
 print("==================================================")

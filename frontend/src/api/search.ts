@@ -1,3 +1,4 @@
+
 import apiClient from "./client";
 
 export interface SearchHit {
@@ -41,17 +42,26 @@ export const searchDocuments = (
 	options?: {
 		mode?: "hybrid" | "keyword" | "semantic";
 		signal?: AbortSignal;
+		minScore?: number;
 	}
 ) =>
 	apiClient.get<SearchResponse>("/search", {
-		params: { q, skip, limit, mode: options?.mode ?? "keyword" },
+		params: {
+			q,
+			skip,
+			limit,
+			mode: options?.mode ?? "keyword",
+			...(options?.minScore !== undefined
+				? { min_score: options.minScore }
+				: {}),
+		},
 		signal: options?.signal,
 	});
 
 export const searchSemantic = (
 	q: string,
 	topK = 10,
-	minScore = 0.2,
+	minScore = 0.3,
 	signal?: AbortSignal
 ) =>
 	apiClient.get<SemanticSearchResponse>("/search/semantic", {

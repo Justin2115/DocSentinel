@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -136,6 +137,13 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
+    extracted_tables: Mapped[list["ExtractedTable"]] = relationship(
+        "ExtractedTable",
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="ExtractedTable.page_number",
+    )
+
     review_items: Mapped[list["ReviewQueue"]] = relationship(
         "ReviewQueue",
         back_populates="document",
@@ -200,6 +208,12 @@ class DocumentPage(Base):
         back_populates="page",
     )
 
+    extracted_tables: Mapped[list["ExtractedTable"]] = relationship(
+        "ExtractedTable",
+        back_populates="page",
+        cascade="all, delete-orphan",
+    )
+
 
 class OCRResult(Base):
     __tablename__ = "ocr_results"
@@ -226,13 +240,18 @@ class OCRResult(Base):
         nullable=True,
     )
 
+    raw_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     confidence: Mapped[float | None] = mapped_column(
         Numeric(5, 2),
         nullable=True,
     )
 
     ocr_engine: Mapped[str | None] = mapped_column(
-        String(100),
+        Text,
         nullable=True,
     )
 
@@ -320,6 +339,116 @@ class ExtractedField(Base):
     page: Mapped["DocumentPage | None"] = relationship(
         "DocumentPage",
         back_populates="extracted_fields",
+    )
+
+
+class ExtractedTable(Base):
+    """One table the OCR pipeline found, kept as cells rather than as text.
+
+    The row/column grid, each cell's bounding box and the confidence the engine
+    actually measured are stored together, so a viewer can render a real table and
+    a reviewer can see which cells were unreadable. `cells` holds the payload from
+    `TableStructure.to_payload()`. A table always belongs to exactly one page:
+    rows from different pages are never merged into one structure.
+    """
+
+    __tablename__ = "extracted_tables"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+
+    document_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    page_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("document_pages.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
+    page_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    bbox: Mapped[list | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    row_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    col_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    header_rows: Mapped[list | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    cells: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+    )
+
+    engine: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    confidence: Mapped[float | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+    )
+
+    uncertain_cells: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    requires_review: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    note: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        nullable=True,
+    )
+
+    # Relationships
+    document: Mapped["Document"] = relationship(
+        "Document",
+        back_populates="extracted_tables",
+    )
+
+    page: Mapped["DocumentPage | None"] = relationship(
+        "DocumentPage",
+        back_populates="extracted_tables",
     )
 
 

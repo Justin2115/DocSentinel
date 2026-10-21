@@ -103,3 +103,26 @@ flowchart LR
 ```
 
 All three modules consume the same normalized ingestion output (see `ingestion-contract.md`), so adding Module 3 later required no changes to how Module 1 or 2 ingest files.
+
+## Local Ollama Integration & Configuration
+
+DocSentinel integrates with a locally hosted **Ollama** instance for evidence-grounded generation in Module 1. Data privacy is strictly enforced: no document content or embeddings are ever sent to external cloud APIs.
+
+### Configuration Settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `OLLAMA_ENABLED` | `true` | Master flag to enable/disable the Ollama provider. |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Loopback address for the local Ollama server. Must remain local. |
+| `OLLAMA_MODEL` | `""` | Name of the locally installed model (e.g. `llama3.2:3b`, `qwen2.5:3b`, `mistral:7b`). Left empty by default. |
+| `OLLAMA_CONNECT_TIMEOUT`| `2.0` | Timeout in seconds for the background availability probe. |
+| `OLLAMA_GENERATE_TIMEOUT`| `90.0` | Maximum generation timeout in seconds on CPU before timing out. |
+| `OLLAMA_NUM_CTX` | `4096` | Context window size for evidence injection. |
+| `OLLAMA_MAX_NEW_TOKENS` | `320` | Max generation tokens per response. |
+
+### Availability Probing & Safe Fallback
+
+1. **Deterministic Fallback:** When `OLLAMA_MODEL` is empty, `OLLAMA_ENABLED` is false, or the Ollama runtime is unreachable, the system automatically falls back to the deterministic extractive answering engine (`engine="extractive_fallback"`). The user is never blocked or served an HTTP 500.
+2. **Pre-Installed Models Only:** The system never attempts to automatically download models over the internet; models must be pulled in advance locally via `ollama run <model>` or `ollama pull <model>`.
+3. **Strict Evidence Grounding:** Only retrieved, authorized passages are passed into the prompt. Passages are tagged as untrusted data blocks. If retrieved passages do not answer the question, the system responds with `INSUFFICIENT_EVIDENCE`.
+4. **Scope Isolation:** Only chunks from authorized, selected documents (`allowed_ids`) are passed to Ollama. Out-of-scope citations are blocked before reaching the client.

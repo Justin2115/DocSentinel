@@ -88,6 +88,54 @@ def test_semantic_search_api_english_and_hindi(tmp_path):
         reset_chroma_client()
 
 
+def test_search_endpoints_use_calibrated_default_min_score(monkeypatch):
+    """Omitting min_score must apply the calibrated floor, not an ad-hoc value."""
+    import pytest
+
+    from app.api import search as search_api
+    from app.core.config import settings
+    from app.schemas.search import SemanticSearchResponse
+
+    captured: list = []
+
+    def fake_semantic_search(db, query, top_k=None, min_score=None, **kwargs):
+        captured.append(min_score)
+        return SemanticSearchResponse(items=[], total=0, query=query)
+
+    monkeypatch.setattr(search_api, "semantic_search", fake_semantic_search)
+    db = SessionLocal()
+    try:
+        headers = get_test_auth_headers(db)
+    finally:
+        db.close()
+
+    r1 = client.get(
+        "/api/search", params={"q": "invoice", "mode": "semantic"}, headers=headers
+    )
+    assert r1.status_code == 200
+    assert captured[-1] == pytest.approx(settings.SEMANTIC_MIN_SCORE)
+
+    r2 = client.get("/api/search/semantic", params={"q": "invoice"}, headers=headers)
+    assert r2.status_code == 200
+    assert captured[-1] == pytest.approx(settings.SEMANTIC_MIN_SCORE)
+
+    r3 = client.get(
+        "/api/search/semantic",
+        params={"q": "invoice", "min_score": "0.1"},
+        headers=headers,
+    )
+    assert r3.status_code == 200
+    assert captured[-1] == pytest.approx(0.1)
+
+
+def test_calibrated_threshold_value_pinned():
+    """The 0.30 floor came from labeled measurements (hard negatives maxed at
+    0.252, relevant median 0.459). Pin it so an ad-hoc retune fails loudly."""
+    from app.core.config import settings
+
+    assert settings.SEMANTIC_MIN_SCORE == 0.30
+
+
 def test_keyword_search_api():
     db = SessionLocal()
     headers = get_test_auth_headers(db)

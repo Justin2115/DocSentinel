@@ -1,5 +1,7 @@
 from hashlib import sha256
 
+import re
+
 from app.core.config import settings
 from app.services.embedding_service import reset_chroma_client, set_encode_override
 
@@ -26,9 +28,9 @@ MULTILINGUAL_CONCEPTS = {
         # English
         "invoice", "payment", "unpaid", "bill", "billing", "settle", "due", "overdue", "pay", "receipt", "pending",
         # Hindi
-        "चालान", "भुगतान", "बकाया", "बिल", "पावती", "रकम",
+        "चालान", "भुगतान", "बकाया", "बिल", "पावती", "रकम", "राशि", "देय", "तारीख", "संख्या",
         # Marathi
-        "बील", "बिलाचे", "पैसे", "भरणा", "पावती", "रक्कम", "अद्याप", "भरलेले", "नाहीत",
+        "बील", "बिलाचे", "बिलाचा", "बिल", "पैसे", "भरणा", "पावती", "रक्कम", "अद्याप", "भरलेले", "नाहीत", "देयक", "तारीख", "क्रमांक", "शुल्क",
     },
     "employment_salary": {
         # English
@@ -59,7 +61,9 @@ def mock_multilingual_encode(texts: list[str]) -> list[list[float]]:
     for text in texts:
         vec = [0.05] * dim
         lowered = (text or "").lower()
-        tokens = set(lowered.replace("\n", " ").replace(".", " ").replace("।", " ").split())
+        tokens = set(
+            re.findall(r"[\w\u0900-\u097F]+", lowered)
+)
 
         # Check concept matches
         for c_idx, (c_name, cluster_words) in enumerate(MULTILINGUAL_CONCEPTS.items()):

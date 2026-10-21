@@ -218,9 +218,12 @@ const SearchResults = ({
 										hit.highlight_terms
 									)}
 								</strong>
-								{hit.similarity != null && (
-									<span className="similarityBadge">
-										Score: {hit.similarity.toFixed(2)}
+								{hit.similarity != null && hit.similarity > 0 && (
+									<span
+										className="similarityBadge"
+										title="Cosine retrieval similarity (0-1). A relevance ranking signal, not an accuracy percentage."
+									>
+										Similarity: {hit.similarity.toFixed(2)}
 									</span>
 								)}
 							</div>
