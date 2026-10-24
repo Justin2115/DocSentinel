@@ -16,7 +16,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from html import escape
-from typing import Any
+from typing import Any, Callable
 
 CELL_SEP = " | "
 
@@ -114,6 +114,10 @@ class TableCell:
     # text layer was never OCR'd). It is not a score of 0.
     confidence: float | None = None
     uncertain: bool = False
+    # True when the characters in this cell are what the page itself produced
+    # (its text layer, or an OCR line whose box sits inside the cell) rather than
+    # what a table model guessed for that slot. The quality gate counts on this.
+    from_page: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -126,6 +130,7 @@ class TableCell:
             "header": self.is_header,
             "confidence": self.confidence,
             "uncertain": self.uncertain,
+            "from_page": self.from_page,
         }
 
 
@@ -143,6 +148,13 @@ class TableStructure:
     uncertain_cells: int = 0
     requires_review: bool = False
     note: str | None = None
+    # Cells whose text is what the page itself produced. A grid where almost every
+    # cell is a model guess is not a reconstruction of this page.
+    page_backed_cells: int = 0
+    # "page" when cell boxes are in the stored page's own coordinates; "corrected"
+    # when the text was read after a deskew or rotation, so the boxes belong to a
+    # frame the viewer does not show.
+    frame: str = "page"
 
     # ---- derivation -----------------------------------------------------
     def add_note(self, text: str) -> "TableStructure":
@@ -181,6 +193,9 @@ class TableStructure:
     def refresh_flags(self) -> "TableStructure":
         """Recompute the counts that are properties of the cells, not inputs."""
         self.uncertain_cells = sum(1 for cell in self.cells if cell.uncertain)
+        self.page_backed_cells = sum(
+            1 for cell in self.cells if cell.from_page and cell.text.strip()
+        )
         scored = [
             cell.confidence for cell in self.cells if cell.confidence is not None
         ]
@@ -197,6 +212,25 @@ class TableStructure:
                     max(float(b[2]) for b in boxes),
                     max(float(b[3]) for b in boxes),
                 )
+        return self
+
+    def remap_boxes(
+        self,
+        box_map: Callable[[tuple[float, float, float, float]], Any],
+    ) -> "TableStructure":
+        """Move every cell box into the page's own frame with a caller's mapping.
+
+        Text read from a rotated version of the page lands in that version's
+        coordinates. A rotation is invertible, so mapping the boxes back keeps the
+        cells, the lines that filled them and the viewer's page image in one frame
+        instead of two.
+        """
+        for cell in self.cells:
+            if cell.bbox is not None:
+                cell.bbox = tuple(float(value) for value in box_map(cell.bbox))
+        if self.bbox is not None:
+            self.bbox = tuple(float(value) for value in box_map(self.bbox))
+        self.frame = "page"
         return self
 
     def grid(self) -> list[list[TableCell | None]]:
@@ -262,10 +296,60 @@ class TableStructure:
             "source": self.source,
             "confidence": self.confidence,
             "uncertain_cells": self.uncertain_cells,
+            "page_backed_cells": self.page_backed_cells,
+            "frame": self.frame,
             "requires_review": self.requires_review,
             "note": self.note,
             "cells": [cell.to_payload() for cell in self.cells],
         }
+
+
+def _cell_from_payload(data: dict[str, Any]) -> TableCell:
+    return TableCell(
+        row=int(data.get("row", 0)),
+        col=int(data.get("col", 0)),
+        text=str(data.get("text") or ""),
+        bbox=tuple(float(value) for value in data["bbox"])
+        if data.get("bbox") is not None
+        else None,
+        colspan=max(1, int(data.get("colspan", 1))),
+        rowspan=max(1, int(data.get("rowspan", 1))),
+        is_header=bool(data.get("header")),
+        confidence=float(data["confidence"])
+        if data.get("confidence") is not None
+        else None,
+        uncertain=bool(data.get("uncertain")),
+        from_page=bool(data.get("from_page")),
+    )
+
+
+def structure_from_payload(data: dict[str, Any]) -> TableStructure:
+    """Rebuild a stored structure exactly as it was written.
+
+    The counts and `confidence` come back as they were recorded rather than
+    recomputed: a refused grid stores no cells yet keeps its `uncertain_cells` and
+    its null confidence, and refreshing would silently erase both facts.
+    """
+    return TableStructure(
+        page_number=int(data.get("page_number", 1)),
+        row_count=int(data.get("row_count") or 0),
+        col_count=int(data.get("col_count") or 0),
+        cells=[_cell_from_payload(cell) for cell in data.get("cells") or []],
+        bbox=tuple(float(value) for value in data["bbox"])
+        if data.get("bbox") is not None
+        else None,
+        engine=str(data.get("engine") or ""),
+        source=str(data.get("source") or "digital"),
+        header_rows=[int(row) for row in data.get("header_rows") or []],
+        confidence=float(data["confidence"])
+        if data.get("confidence") is not None
+        else None,
+        uncertain_cells=int(data.get("uncertain_cells") or 0),
+        requires_review=bool(data.get("requires_review")),
+        note=data.get("note"),
+        page_backed_cells=int(data.get("page_backed_cells") or 0),
+        frame=str(data.get("frame") or "page"),
+    )
 
 
 def _words_for_rect(page_words: list[Any], rect: tuple[float, float, float, float]) -> str:
@@ -352,6 +436,10 @@ def from_pymupdf_table(
                     colspan=_span_size(cell_box, col_starts, 0, 2) if col_starts else 1,
                     rowspan=_span_size(cell_box, row_starts, 1, 3) if row_starts else 1,
                     is_header=is_header,
+                    # The digital text layer is the page's own characters, so every
+                    # cell here is page-backed whether the words or the table
+                    # extractor supplied it.
+                    from_page=True,
                 )
             )
 
@@ -445,6 +533,7 @@ def from_paddle_html_rows(
                 text=text,
                 confidence=confidence,
                 uncertain=uncertain,
+                from_page=reading is not None,
             )
             structure.cells.append(cell)
             slot += width
@@ -491,8 +580,9 @@ def from_ruled_grid(
     header_set = set(header_rows or [])
     for cell in cells:
         row, col = int(cell["row"]), int(cell["col"])
+        reading = readings.get((row, col))
         text, confidence, uncertain = _resolve_cell_text(
-            readings.get((row, col)),
+            reading,
             _clean((hints or {}).get((row, col), "")),
             script_page=script_page,
         )
@@ -507,6 +597,7 @@ def from_ruled_grid(
                 is_header=row in header_set,
                 confidence=confidence,
                 uncertain=uncertain,
+                from_page=reading is not None,
             )
         )
     structure.flag_misread_amounts()

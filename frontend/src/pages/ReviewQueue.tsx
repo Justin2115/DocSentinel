@@ -29,6 +29,7 @@ import {
   approveDocument,
   rejectDocument,
   requestDocumentRevision,
+  pageHasRenderableTable,
 } from "../api/document";
 import type { DocumentDetail, OCRResult } from "../api/document";
 import { useAuth } from "../context/AuthContext";
@@ -431,7 +432,7 @@ export default function ReviewQueue() {
                               (failed
                                 ? "OCR failed on this page: no text was recovered."
                                 : "(No text detected on this page)");
-                            const prose = pageTables.length
+                            const prose = pageHasRenderableTable(pageTables)
                               ? stripTableBlocks(rawText)
                               : rawText;
 

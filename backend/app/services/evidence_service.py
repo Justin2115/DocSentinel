@@ -421,6 +421,12 @@ def tokenize(text: str) -> list[str]:
 
 _SEPARATORS_RE = re.compile(r"[\s_.\-/\\]+")
 
+# A sentence ends in its own script. Devanagari text - Hindi and Marathi, both of
+# which this pipeline reads - uses the danda, and OCR keeps the Hebrew and
+# Armenian marks when they appear. Everything else is a line the typesetter
+# wrapped, not the end of a thought.
+_SENTENCE_END = re.compile(r"[.!?।॥?!]\s*$")
+
 
 def join_separators(text: str) -> str:
     """The text with every word separator removed.
@@ -1442,24 +1448,51 @@ def dedupe_units(units: Sequence[EvidenceUnit]) -> list[EvidenceUnit]:
         if not key or key in seen:
             continue
         tokens = tokenize(unit.text)
-        subsumed = any(
-            kept_unit.document_id == unit.document_id
-            and kept_unit.page_number == unit.page_number
-            and kept_unit.matched_terms == unit.matched_terms
-            and kept_unit.value_tokens == unit.value_tokens
-            and (
-                _is_contiguous(tokenize(kept_unit.text), tokens)
-                or _is_contiguous(tokens, tokenize(kept_unit.text))
-            )
-            for kept_unit in kept
+        subsumed_index = next(
+            (
+                index
+                for index, kept_unit in enumerate(kept)
+                if kept_unit.document_id == unit.document_id
+                and kept_unit.page_number == unit.page_number
+                and kept_unit.matched_terms == unit.matched_terms
+                and kept_unit.value_tokens == unit.value_tokens
+                and (
+                    _is_contiguous(tokenize(kept_unit.text), tokens)
+                    or _is_contiguous(tokens, tokenize(kept_unit.text))
+                )
+            ),
+            None,
         )
-        if subsumed:
+        if subsumed_index is not None:
+            kept_unit = kept[subsumed_index]
+            if _ends_mid_sentence(kept_unit.text) and not _ends_mid_sentence(unit.text):
+                # The kept window is this one with its last line missing: OCR broke a
+                # sentence across two lines, and ranking reaches here with the shorter
+                # fragment first. Keeping the fragment is what hands the model
+                # "… in accordance with the laws" and then marks "Indonesia" as a
+                # fabrication. The window that finishes the sentence replaces it, in
+                # place, so ordering by document and page survives.
+                kept[subsumed_index] = unit
+                seen.add(key)
+                continue
             # One window inside another, matching the same terms and carrying the
             # same values, is the same evidence twice.
             continue
         seen.add(key)
         kept.append(unit)
     return kept
+
+
+def _ends_mid_sentence(text: str) -> bool:
+    """Whether a window stops where an OCR line broke, instead of at a sentence end.
+
+    OCR gives one text box per detected line, so a wrapped clause arrives as two
+    lines with no punctuation between them. This is a structural test on the last
+    character only - it is what tells a fragment from a finished sentence without
+    knowing anything about the document, the language, or the question.
+    """
+    stripped = (text or "").strip()
+    return not bool(stripped) or not _SENTENCE_END.search(stripped)
 
 
 def _is_contiguous(needles: Sequence[str], haystack: Sequence[str]) -> bool:

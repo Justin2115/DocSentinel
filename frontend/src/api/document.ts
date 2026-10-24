@@ -78,6 +78,9 @@ export interface ExtractedTableCell {
 	header: boolean;
 	confidence: number | null;
 	uncertain: boolean;
+	// The page's own recognised text fell inside this cell's box. Without it the
+	// cell holds a reading nothing on the page confirmed.
+	from_page: boolean;
 }
 
 export interface ExtractedTable {
@@ -95,8 +98,31 @@ export interface ExtractedTable {
 	uncertain_cells: number;
 	requires_review: boolean;
 	note: string | null;
+	page_backed_cells: number;
+	// "page" or "corrected": which image the cell boxes belong to. Boxes in the
+	// "corrected" frame must not be drawn over the displayed page.
+	frame: string;
 	cells: ExtractedTableCell[];
 }
+
+/**
+ * Whether this record is a table the reader measured or a grid it refused.
+ *
+ * A refused grid arrives with the shape it measured, no cells at all and an
+ * explanation: rendering it as a table would show an empty grid and hide the page's
+ * own recognised text, which is exactly what the reader keeps for the reviewer.
+ */
+export const isRejectedTable = (table: ExtractedTable): boolean =>
+	table.cells.length === 0;
+
+/**
+ * Whether a page's stored records include a grid that can actually be drawn.
+ *
+ * Callers use this to decide whether to take the "cell | cell" lines out of the
+ * page's text: only a grid that is rendered may replace them.
+ */
+export const pageHasRenderableTable = (tables: ExtractedTable[]): boolean =>
+	tables.some((table) => !isRejectedTable(table));
 
 export interface DocumentDetail
 	extends DocumentRecord {

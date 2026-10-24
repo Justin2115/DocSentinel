@@ -61,6 +61,10 @@ class ExtractedTableCellResponse(BaseModel):
     # never OCR'd). It is not a score of 0.
     confidence: float | None = None
     uncertain: bool = False
+    # Whether the page's own recognised text landed inside this box. A cell without
+    # page backing holds text no page confirmed, which is worth showing separately
+    # from a cell that was read and scored.
+    from_page: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -80,6 +84,13 @@ class ExtractedTableResponse(BaseModel):
     uncertain_cells: int = 0
     requires_review: bool = False
     note: str | None = None
+    # How many cells hold text the page itself produced. A rejected grid carries no
+    # cells, so it reports 0 of its own rather than the count it measured before
+    # being refused.
+    page_backed_cells: int = 0
+    # "page" or "corrected": which image the cell boxes belong to. An overlay drawn
+    # in the wrong frame points at the wrong part of the page.
+    frame: str = "page"
     cells: list[ExtractedTableCellResponse] = []
 
     model_config = ConfigDict(from_attributes=True)

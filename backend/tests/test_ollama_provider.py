@@ -14,6 +14,7 @@ import pytest
 backend_dir = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(backend_dir))
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.document import Document, DocumentPage, OCRResult
 from app.models.user import User
@@ -37,10 +38,16 @@ def clean_provider_cache():
 class FakeOllama:
     """Records the requests a test made and replies with a canned completion."""
 
-    def __init__(self, models=("llama3.2:3b",), response="", error=None):
-        self.models = list(models)
+    def __init__(self, models=None, response="", error=None, extra=None):
+        # Absent a list, the runtime has the configured model installed. Naming
+        # llama3.2:3b here instead tied every one of these tests to whichever tag
+        # .env happens to point at: switch the setting and the stub claims the
+        # model is missing, so the fallback path gets tested by accident.
+        installed = (settings.OLLAMA_MODEL or "").strip()
+        self.models = list(models) if models is not None else ([installed] if installed else [])
         self.response = response
         self.error = error
+        self.extra = dict(extra or {})
         self.requests: list[dict] = []
 
     def get(self, path, timeout):
@@ -52,7 +59,7 @@ class FakeOllama:
         self.requests.append(payload)
         if self.error is not None:
             raise self.error
-        return {"response": self.response, "eval_count": 40}
+        return {"response": self.response, "eval_count": 40, **self.extra}
 
     def install(self, monkeypatch):
         monkeypatch.setattr(llm_service, "_get", self.get)
@@ -102,6 +109,130 @@ def test_status_reports_disabled_missing_model_and_installed(monkeypatch):
     payload = llm_service.provider_status(force=True)
     assert payload["model_installed"] is False
     assert "not installed" in payload["reason"]
+
+
+class TestTheModelNameIsConfiguration:
+    """Switching the generation model must be a config change, never a code change.
+
+    The name arrives from OLLAMA_MODEL, so llama3.2:3b can be replaced by
+    qwen3:4b with one environment value - and a switch that cannot work is
+    reported as unavailable instead of quietly answered by the fallback.
+    """
+
+    BLOCK = (
+        "[1] document_id=1 document=clinic_receipt.pdf page=1 source=entry\n"
+        "<untrusted_document_text>\nReading therapy $7.60\n</untrusted_document_text>"
+    )
+
+    def test_any_installed_model_answers_with_its_own_name(self, monkeypatch):
+        monkeypatch.setattr(settings, "OLLAMA_MODEL", "qwen3:4b")
+        fake = FakeOllama(
+            models=("llama3.2:3b", "qwen3:4b"),
+            response="Reading therapy $7.60.\nEVIDENCE: 1",
+        )
+        fake.install(monkeypatch)
+        payload = llm_service.provider_status(force=True)
+        assert payload["model"] == "qwen3:4b"
+        assert payload["model_installed"] is True
+        assert llm_service.is_usable() is True
+        result = llm_service.generate_answer("Which activity involves reading?", [self.BLOCK])
+        assert result is not None
+        assert fake.requests[0]["model"] == "qwen3:4b"
+
+    def test_a_different_tag_of_the_same_family_is_not_the_configured_model(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "OLLAMA_MODEL", "qwen3:4b")
+        FakeOllama(models=("qwen3:8b",)).install(monkeypatch)
+        payload = llm_service.provider_status(force=True)
+        assert payload["model_installed"] is False
+        assert "not installed" in payload["reason"]
+        assert llm_service.generate_answer("q", [self.BLOCK]) is None
+
+    def test_an_unqualified_name_means_the_latest_tag(self, monkeypatch):
+        monkeypatch.setattr(settings, "OLLAMA_MODEL", "qwen3")
+        FakeOllama(models=("qwen3:latest",)).install(monkeypatch)
+        assert llm_service.provider_status(force=True)["model_installed"] is True
+
+
+def test_reasoning_is_off_unless_it_is_asked_for(monkeypatch):
+    """A reasoning model spends the token budget on its scratchpad first.
+
+    The flag goes to every model because the alternative is worse: with thinking
+    left on, qwen3-class models can return an empty answer field and the chatbot
+    falls back without anyone being told why.
+    """
+    monkeypatch.setattr(settings, "OLLAMA_MODEL", "qwen3:4b")
+    fake = FakeOllama(
+        models=("qwen3:4b",), response="Reading therapy $7.60.\nEVIDENCE: 1"
+    )
+    fake.install(monkeypatch)
+    block = (
+        "<untrusted_document_text>\nReading therapy $7.60\n</untrusted_document_text>"
+    )
+    assert llm_service.generate_answer("q", [block]) is not None
+    assert fake.requests[0]["think"] is False
+
+    monkeypatch.setattr(settings, "OLLAMA_THINKING", True)
+    assert llm_service.generate_answer("q", [block]) is not None
+    assert fake.requests[1]["think"] is True
+
+
+def test_a_scratchpad_without_an_answer_is_not_mined(monkeypatch, caplog):
+    fake = FakeOllama(
+        response="",
+        extra={
+            "thinking": "The passage says $7.60, so twice that would be $15.20...",
+            "eval_count": 40,
+        },
+    )
+    fake.install(monkeypatch)
+    with caplog.at_level("WARNING"):
+        result = llm_service.generate_answer(
+            "q", ["<untrusted_document_text>\nReading therapy $7.60\n</untrusted_document_text>"]
+        )
+    assert result is None
+    assert "reasoning but no answer" in caplog.text
+
+
+def test_the_answer_is_attributed_to_the_model_that_ran(monkeypatch):
+    """The notes name the model, so they have to name the one Ollama used."""
+    monkeypatch.setattr(settings, "OLLAMA_MODEL", "qwen3")
+    fake = FakeOllama(
+        models=("qwen3:latest", "qwen3:4b"),
+        response="Reading therapy $7.60.\nEVIDENCE: 1",
+        extra={"model": "qwen3:4b", "eval_duration": 1_200_000_000},
+    )
+    fake.install(monkeypatch)
+    result = llm_service.generate_answer(
+        "q", ["<untrusted_document_text>\nReading therapy $7.60\n</untrusted_document_text>"]
+    )
+    assert result is not None
+    assert result.model == "qwen3:4b"
+    assert result.raw["eval_duration"] == 1_200_000_000
+    assert result.latency_ms >= 0
+
+
+def test_which_model_ran_is_logged_even_when_the_answer_is_dropped(monkeypatch, caplog):
+    """The rejected generations are the ones an auditor asks about.
+
+    "Did the configured model produce this?" has to be answerable from the backend
+    log for every generation, not only for the answers that survived the gates.
+    """
+    monkeypatch.setattr(settings, "OLLAMA_MODEL", "llama3.2:3b")
+    fake = FakeOllama(
+        response="INSUFFICIENT_EVIDENCE",
+        extra={"model": "llama3.2:3b", "eval_count": 3},
+    )
+    fake.install(monkeypatch)
+    with caplog.at_level("INFO"):
+        assert (
+            llm_service.generate_answer(
+                "q", ["<untrusted_document_text>\nReading therapy $7.60\n</untrusted_document_text>"]
+            )
+            is None
+        )
+    assert "asked llama3.2:3b, reported llama3.2:3b" in caplog.text
 
 
 def test_refused_connection_is_reported_not_raised(monkeypatch):
@@ -255,6 +386,84 @@ def test_unauthorized_document_text_never_reaches_the_model(monkeypatch):
         db.query(User).filter(User.id == outsider.id).delete()
         db.commit()
         db.close()
+
+
+SCRATCHPAD = (
+    'We are given 6 evidence passages. The question is: "Whose law governs this '
+    'agreement?"\n\nWe must answer only from the numbered evidence passages (the '
+    'passages are numbered 1 to 6). Passage [1] says: Reading therapy $7.60\n'
+    'EVIDENCE: 1'
+)
+
+
+def test_an_analysis_preamble_is_not_an_answer(monkeypatch):
+    """Model self-talk must not reach the user just because it quotes a passage.
+
+    The scratchpad repeats the harness's own passage numbering, which no document
+    contains, and it is verifiably not a sentence addressed to the user. The quote
+    gate accepts it, so this guard is the only thing between it and the chat.
+    """
+    fake = FakeOllama(models=("stub:1b",), response=SCRATCHPAD)
+    fake.install(monkeypatch)
+    monkeypatch.setattr(settings, "OLLAMA_MODEL", "stub:1b")
+    result = llm_service.generate_answer(
+        "Whose law governs this agreement?",
+        ["[1] document=clinic_receipt.pdf page=1\nReading therapy $7.60"],
+    )
+    assert result is None
+
+
+def test_a_truncated_scratchpad_is_dropped_with_a_reason(monkeypatch, caplog):
+    """Budget exhausted mid-preamble: the text stops, but it still is not an answer."""
+    fake = FakeOllama(
+        models=("stub:1b",),
+        response=(
+            "First, I need to understand the user's question. The evidence passages "
+            "are: [1] Reading therapy $7.60"
+        ),
+        extra={"eval_count": settings.OLLAMA_MAX_NEW_TOKENS, "done": True},
+    )
+    fake.install(monkeypatch)
+    monkeypatch.setattr(settings, "OLLAMA_MODEL", "stub:1b")
+    blocks = ["[1] document=clinic_receipt.pdf page=1\nReading therapy $7.60"]
+    with caplog.at_level("INFO"):
+        result = llm_service.generate_answer("Whose law governs this agreement?", blocks)
+    assert result is None
+    assert any("preamble" in record.message.lower() for record in caplog.records)
+
+
+def test_the_preamble_guard_leaves_a_plain_grounded_answer_alone(monkeypatch):
+    """The guard must not become a way to reject every answer that mentions a passage."""
+    fake = FakeOllama(
+        models=("stub:1b",),
+        response="Reading therapy $7.60 is the activity that involves reading.\nEVIDENCE: 1",
+    )
+    fake.install(monkeypatch)
+    monkeypatch.setattr(settings, "OLLAMA_MODEL", "stub:1b")
+    result = llm_service.generate_answer(
+        "Which activity involves reading?",
+        ["[1] document=clinic_receipt.pdf page=1\nReading therapy $7.60"],
+    )
+    assert result is not None
+    assert result.text.startswith("Reading therapy $7.60")
+
+
+def test_a_scratchpad_never_reaches_the_chat_answer(monkeypatch, evidence_doc):
+    fake = FakeOllama(response=SCRATCHPAD)
+    fake.install(monkeypatch)
+    db = SessionLocal()
+    try:
+        response = answer_question(
+            db, ChatQueryRequest(question="Which activity involves reading?")
+        )
+    finally:
+        db.close()
+    assert response.engine != "llm_ollama"
+    lowered = response.answer.lower()
+    assert "evidence passage" not in lowered
+    assert "we are given" not in lowered
+    assert "i need to" not in lowered
+    assert "passage [" not in lowered
 
 
 @pytest.mark.skipif(

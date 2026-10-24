@@ -65,9 +65,19 @@ class Settings(BaseSettings):
     # is expected to be a loopback address, and the model must already be
     # installed (no automatic downloads). Left disabled when OLLAMA_MODEL is
     # empty, so the chatbot stays on deterministic extractive answers.
+    #
+    # The generation model is chosen here and nowhere else: switch it by setting
+    # OLLAMA_MODEL to any locally installed model name (ollama list) and restart
+    # the backend. Nothing in the code keys off a particular model name.
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_MODEL: str = ""
     OLLAMA_ENABLED: bool = True
+    # Reasoning models (qwen3 and similar) answer only after a scratchpad, and
+    # that scratchpad counts against OLLAMA_MAX_NEW_TOKENS: with thinking left on
+    # the answer field can come back empty and the chatbot silently stays on the
+    # extractive answer. Kept off so every model is asked for the same thing - a
+    # direct grounded answer. Set true to let a reasoning model think out loud.
+    OLLAMA_THINKING: bool = False
     # Connect/keepalive budget for the availability probe, in seconds.
     OLLAMA_CONNECT_TIMEOUT: float = 2.0
     # Generation budget. A 3B local model needs this much on CPU only

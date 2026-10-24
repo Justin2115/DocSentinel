@@ -642,25 +642,32 @@ class TestTableEvidenceGuards:
     def test_script_page_drops_rows_with_no_page_support(self, monkeypatch):
         """Latin lookalikes of Devanagari glyphs are misreads, not transcriptions.
 
-        The cells stay in the structure as unreadable and the table is flagged for
-        review: the model did find a table, and saying so is better than silently
-        storing its Latin noise.
+        A grid in which not one cell was read is refused by the quality gate rather
+        than stored as an empty table: the page keeps its own recognised text, the
+        record says what was found and why it is not shown, and the model's Latin
+        noise is never indexed as the page's content.
         """
         ocr_lines = [(self._box(120, 120, 190, 140), "असलेली माहिती", 0.9)]
+        from app.services import ocr_service, table_quality
+
         lines, count = self._run(monkeypatch, devanagari_ocr=True, ocr_lines=ocr_lines)
         assert count == 1
-        structure = self.last_structures[0]
-        # Nothing in this grid was read by the page, so nothing survives - not even
-        # the digits. Measured on real Marathi scans, the table model puts an amount
-        # in the quantity slot; an amount in the wrong column is worse than a blank.
-        assert [(cell.row, cell.col, cell.text) for cell in structure.cells] == [
-            (0, 0, ""), (0, 1, ""), (1, 0, ""), (1, 1, ""),
-        ]
-        assert all(cell.uncertain for cell in structure.cells)
+        record = self.last_structures[0]
+        # The refusal keeps the measurement and drops the invented cells.
+        assert record.cells == []
+        assert (record.row_count, record.col_count) == (2, 2)
+        assert record.confidence is None
+        assert record.requires_review is True
+        assert "Not shown as a table" in record.note
+        assert "no cell in the grid could be read" in record.note
         assert lines == []
-        assert structure.uncertain_cells == 4
-        assert structure.requires_review is True
-        assert "1,250.00" not in structure.to_html()
+        assert "1,250.00" not in record.to_html()
+        # A refused grid consumes nothing: with no accepted structure, every line
+        # the page read stays in the page's own prose.
+        refused = table_quality.screen([record], page_size=(200, 200), page_lines=1)
+        assert refused.accepted == []
+        kept_lines = ocr_service._lines_outside_structures(ocr_lines, refused.accepted)
+        assert [item[1] for item in kept_lines] == ["असलेली माहिती"]
 
     def test_numeric_cells_survive_on_a_script_page(self, monkeypatch):
         """Digits survive on such a page when the page itself read them."""

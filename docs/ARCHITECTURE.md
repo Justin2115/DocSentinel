@@ -114,7 +114,8 @@ DocSentinel integrates with a locally hosted **Ollama** instance for evidence-gr
 |---|---|---|
 | `OLLAMA_ENABLED` | `true` | Master flag to enable/disable the Ollama provider. |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Loopback address for the local Ollama server. Must remain local. |
-| `OLLAMA_MODEL` | `""` | Name of the locally installed model (e.g. `llama3.2:3b`, `qwen2.5:3b`, `mistral:7b`). Left empty by default. |
+| `OLLAMA_MODEL` | `""` | Name of the locally installed model (e.g. `llama3.2:3b`, `qwen3:4b`, `mistral:7b`). Left empty by default. |
+| `OLLAMA_THINKING` | `false` | Ask the model for a direct answer (`false`) or let a reasoning model write its scratchpad first (`true`). Scratchpad tokens count against `OLLAMA_MAX_NEW_TOKENS`, so leaving it on can cost the answer. |
 | `OLLAMA_CONNECT_TIMEOUT`| `2.0` | Timeout in seconds for the background availability probe. |
 | `OLLAMA_GENERATE_TIMEOUT`| `90.0` | Maximum generation timeout in seconds on CPU before timing out. |
 | `OLLAMA_NUM_CTX` | `4096` | Context window size for evidence injection. |
@@ -126,3 +127,5 @@ DocSentinel integrates with a locally hosted **Ollama** instance for evidence-gr
 2. **Pre-Installed Models Only:** The system never attempts to automatically download models over the internet; models must be pulled in advance locally via `ollama run <model>` or `ollama pull <model>`.
 3. **Strict Evidence Grounding:** Only retrieved, authorized passages are passed into the prompt. Passages are tagged as untrusted data blocks. If retrieved passages do not answer the question, the system responds with `INSUFFICIENT_EVIDENCE`.
 4. **Scope Isolation:** Only chunks from authorized, selected documents (`allowed_ids`) are passed to Ollama. Out-of-scope citations are blocked before reaching the client.
+5. **Switching the generation model** is a configuration change and nothing else: set `OLLAMA_MODEL` to any tag reported by `ollama list` and restart the backend. Availability is checked against that exact tag (an unqualified name means its `:latest`), so a half-installed switch is reported as unavailable instead of quietly changing which engine answers. `scripts/eval_llm_models.py` measures the models against each other on the same questions and evidence.
+6. **Reasoning models need their scratchpad suppressed and proved suppressed.** Measured on this CPU over 32 labeled questions: `llama3.2:3b` passed the evidence gate on 14/14 free-form questions at a 15.0 s median generation, while `qwen3:4b` passed 7/14 at 70.1 s and put a chain-of-thought preamble in the `response` field even with `think: false` - seven of its accepted answers were 1.0-1.4 k characters of reasoning truncated before any answer arrived. Its p95 of 75.5 s also sits inside the 90 s `OLLAMA_GENERATE_TIMEOUT`, so a loaded machine would turn those into timeouts. `OLLAMA_MODEL=llama3.2:3b` is therefore the measured choice; switch to a reasoning model only with a raised `OLLAMA_MAX_NEW_TOKENS` and a re-run of the comparison.

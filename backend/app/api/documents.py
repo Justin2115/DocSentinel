@@ -238,6 +238,50 @@ def _merged_extraction_pages(db: Session, document_id: int):
         .filter(OCRResult.document_id == document_id)
         .all()
     )
+    # Tables are read back as structures, not as their rendered text: field
+    # extraction needs rows, columns, headers and per-cell confidence, and a
+    # resumed run that lost them would fall back to guessing from the page's prose.
+    from app.services.table_structure import structure_from_payload
+
+    def stored_payload(stored: ExtractedTable) -> dict:
+        cells = list(stored.cells or [])
+        return {
+            "page_number": stored.page_number,
+            "row_count": stored.row_count,
+            "col_count": stored.col_count,
+            "bbox": stored.bbox,
+            "header_rows": stored.header_rows,
+            "engine": stored.engine,
+            "source": stored.source,
+            "confidence": stored.confidence,
+            "uncertain_cells": stored.uncertain_cells,
+            "requires_review": stored.requires_review,
+            "note": stored.note,
+            # Not stored as columns: the cell flags carry it, and the frame is the
+            # one fact a note can state - kept so a rebuilt grid cannot claim page
+            # coordinates it was never written down as having.
+            "page_backed_cells": sum(
+                1
+                for cell in cells
+                if cell.get("from_page") and str(cell.get("text") or "").strip()
+            ),
+            "frame": "corrected"
+            if "deskewed frame" in (stored.note or "")
+            else "page",
+            "cells": cells,
+        }
+
+    tables_by_page: dict[int, list] = {}
+    for stored in (
+        db.query(ExtractedTable)
+        .filter(ExtractedTable.document_id == document_id)
+        .order_by(ExtractedTable.page_number, ExtractedTable.id)
+        .all()
+    ):
+        tables_by_page.setdefault(int(stored.page_number), []).append(
+            structure_from_payload(stored_payload(stored))
+        )
+
     pages: list[ExtractedPage] = []
     engines: set[str] = set()
     confidences: list[float] = []
@@ -256,13 +300,18 @@ def _merged_extraction_pages(db: Session, document_id: int):
         failed = "Failed" in (ocr.ocr_engine or "")
         if failed:
             failed_pages += 1
+        page_number = page.page_number if page is not None else 1
         pages.append(
             ExtractedPage(
-                page_number=page.page_number if page is not None else 1,
+                page_number=page_number,
                 text=ocr.extracted_text or "",
-                confidence=conf if conf is not None else 0.0,
+                # Stays None: a page nobody scored must not reach field extraction
+                # looking like a page scored at zero, which would cap every field
+                # read from it at the worst possible confidence.
+                confidence=conf,
                 raw_text=ocr.raw_text or ocr.extracted_text or "",
                 ocr_failed=failed,
+                tables=tables_by_page.get(page_number, []),
             )
         )
     combined = "\n\n".join(p.text for p in pages if p.text).strip()

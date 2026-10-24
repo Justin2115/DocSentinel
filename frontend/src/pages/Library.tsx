@@ -19,6 +19,7 @@ import {
 	getDocument,
 	getDocumentProcessing,
 	getDocuments,
+	pageHasRenderableTable,
 	retryDocumentProcessing,
 } from "../api/document";
 import type {
@@ -1025,10 +1026,11 @@ const Library = () => {
 																: "No text layer on this page.");
 													// Measured rows are drawn as a table below, so the
 													// same rows are not printed twice as "cell | cell".
-													// With no structure for the page, the raw text -
-													// table markers included - is the fallback.
+													// A page whose only record is a refused grid keeps
+													// every line the reader recognised: the notice
+													// explains it, the text stays searchable.
 													const prose =
-														pageTables.length > 0
+														pageHasRenderableTable(pageTables)
 															? stripTableBlocks(rawPageText)
 															: rawPageText;
 													const focused =

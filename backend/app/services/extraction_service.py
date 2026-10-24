@@ -13,11 +13,18 @@ logger = logging.getLogger(__name__)
 class ExtractedFieldData:
     field_name: str
     field_value: str
-    confidence: float
+    # None means nothing measured this value (a digital text layer is the
+    # document's own characters; a grid slot no engine scored has no recogniser
+    # number). It is not a score of zero and not a low score.
+    confidence: float | None = None
     page_number: int = 1
     original_value: str | None = None
     corrected_value: str | None = None
     is_verified: bool = False
+    # True when the value is present but something about it could not be read or
+    # checked: a cell no engine resolved, or a row rebuilt from text with no
+    # structure and no score behind it. Distinct from a low measured confidence.
+    uncertain: bool = False
 
 
 @dataclass
@@ -38,8 +45,10 @@ DOCUMENT_TYPE_RULES: list[tuple[str, str, list[str]]] = [
     ("Budget Reports", "Finance", ["budget report", "budget allocation", "financial forecast", "expenditure report", "fiscal year", "budget variance", "financial plan"]),
     ("Tax Documents", "Finance", ["tax document", "form 16", "w-2", "1099", "tax return", "income tax", "tds certificate", "tax assessment", "pan card"]),
     ("Receipt", "Finance", ["receipt", "cash receipt", "payment receipt", "amount paid", "balance paid", "transaction id"]),
+    ("Bank Statements", "Finance", ["bank statement", "account statement", "statement of account", "account no", "ifsc", "opening balance", "closing balance", "transaction history", "debit credit"]),
 
     # HR
+    ("Resumes", "HR", ["curriculum vitae", "resume", "work experience", "career objective", "professional summary", "academic qualification", "technical skills", "references available"]),
     ("Employee Records", "HR", ["employee record", "employment details", "employee details", "employee name", "staff record", "curriculum vitae", "resume", "joining date", "personal details", "educational details"]),
     ("Application Form", "HR", ["application form", "applicant name", "reference #", "employment application", "candidate", "personal details", "educational details"]),
     ("Policies", "HR", ["policy", "guidelines", "code of conduct", "regulations", "terms of employment", "leave policy", "workplace policy", "hr policy"]),
@@ -61,6 +70,9 @@ DOCUMENT_TYPE_RULES: list[tuple[str, str, list[str]]] = [
 
     # Other / Medical / ID (fallback mappings)
     ("Medical Claim", "Operations", ["medical claim", "diagnosis", "health insurance", "hospital", "patient", "claim form", "doctor"]),
+    # An insurance policy is a financial contract, not a workplace policy: the two
+    # share the word "policy", so the specific labels have to be listed.
+    ("Insurance Policy", "Finance", ["insurance policy", "policy number", "policyholder", "policy holder", "sum assured", "premium", "coverage period", "claim settlement", "benefit year"]),
     ("ID Document", "HR", ["identity card", "passport", "driver license", "driving licence", "aadhaar", "ssn", "date of birth", "dob", "nationality", "id number"]),
 ]
 
@@ -158,13 +170,82 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
         ],
         "base_confidence": 92.0,
     },
-    # Outstanding Balance
+    # Outstanding Balance. A labelled balance of another kind is not an
+    # outstanding one: "Opening Balance" on a statement is not money owed.
     {
         "field_name": "outstanding_balance",
         "patterns": [
-            rf"(?i)(?:outstanding\s*balance|balance\s*due|balance)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+            rf"(?i)(?:outstanding\s*balance|balance\s*due)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+            rf"(?i)(?<!opening\s)(?<!closing\s)(?<!adjusted\s)(?<!credit\s)(?<!debit\s)\bbalance\b\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
         ],
         "base_confidence": 91.0,
+    },
+    # Statement balances keep their own labels rather than becoming one "balance".
+    {
+        "field_name": "opening_balance",
+        "patterns": [
+            rf"(?i)(?:opening\s*balance|balance\s*brought\s*forward|opening\s*amount)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([-]?[\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 92.0,
+    },
+    {
+        "field_name": "closing_balance",
+        "patterns": [
+            rf"(?i)(?:closing\s*balance|balance\s*carried\s*forward|closing\s*amount)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([-]?[\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 92.0,
+    },
+    {
+        "field_name": "account_number",
+        "patterns": [
+            r"(?i)(?:account\s*(?:no\.?|number|#)|a/c\s*no\.?|acct\s*no\.?)\s*[:\|\-\n]?\s*([0-9][0-9\s\-]{5,24})",
+        ],
+        "base_confidence": 90.0,
+    },
+    {
+        "field_name": "bank_identifier",
+        "patterns": [
+            r"(?i)\b(?:ifsc|swift)\b\s*(?:code)?\s*[:\|\-\n]?\s*([A-Z]{4}[A-Z0-9]{0,7})",
+            r"(?i)(?:bank\s*(?:code|branch))\s*[:\|\-\n]?\s*([A-Z0-9][A-Z0-9\s\-/.]{3,30})",
+        ],
+        "base_confidence": 90.0,
+    },
+    {
+        "field_name": "statement_period",
+        "patterns": [
+            r"(?i)(?:statement\s*(?:period|for)|for\s*the\s*(?:period|month|year))\s*[:\|\-\n]?\s*([A-Za-z0-9\s,\-\/\.]{4,40})",
+        ],
+        "base_confidence": 86.0,
+    },
+    # Insurance: the two figures a policy exists to state.
+    {
+        "field_name": "sum_assured",
+        "patterns": [
+            rf"(?i)(?:sum\s*assured|cover\s*amount|insured\s*(?:amount|sum))\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+(?:\.\d{{2}})?)",
+        ],
+        "base_confidence": 90.0,
+    },
+    {
+        "field_name": "premium",
+        "patterns": [
+            rf"(?i)(?:annual\s*premium|renewal\s*premium|premium\s*amount|premium)\s*[:\|\-\n]?\s*{_CURRENCY_PREFIX}([\d,]+\.\d{{2}})",
+        ],
+        "base_confidence": 89.0,
+    },
+    # Résumé / employment record labels.
+    {
+        "field_name": "experience",
+        "patterns": [
+            r"(?i)(?:total\s*(?:work\s*)?experience|years?\s*of\s*experience|professional\s*experience|experience)\s*[:\|\-\n]?\s*(\d{1,2}(?:\.\d)?\s*(?:years?|yrs?)[^\n]{0,30})",
+        ],
+        "base_confidence": 84.0,
+    },
+    {
+        "field_name": "education",
+        "patterns": [
+            r"(?i)(?:educational\s*qualifications?|academic\s*qualifications?|qualification|education|degree)\s*[:\|\-\n]?\s*([A-Za-z0-9\s,&\.]{3,60})",
+        ],
+        "base_confidence": 82.0,
     },
     # Amount Paid
     {
@@ -300,7 +381,11 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
         "field_name": "party_two",
         "patterns": [
             r"(?i)(?:and\s*(?:the\s*)?second\s*party|receiving\s*party|lessee|licensee|employee|contractor)\s*[:\|\-\n]?\s*([A-Za-z0-9\u0900-\u097F\s,\.&]{3,60}?)(?:,|\shereinafter|\s\()",
-            r"(?i)(?:and\s+)([A-Za-z0-9\u0900-\u097F\s,\.&]{3,60}?)(?:,\s*hereinafter)",
+            # "X, and Y, hereinafter Z": the second party is the name after the
+            # connective, so a span that starts with the connective itself
+            # ("and between Alpha Corp, hereinafter Client") is the first party
+            # and must not be stored as the second.
+            r"(?i)(?:and\s+)(?!between\b|by\b|the\b|of\b|with\b)([A-Za-z0-9\u0900-\u097F\s,\.&]{3,60}?)(?:,\s*hereinafter)",
         ],
         "base_confidence": 84.0,
     },
@@ -391,11 +476,21 @@ FIELD_EXTRACTION_RULES: list[dict[str, Any]] = [
     {
         "field_name": "id_number",
         "patterns": [
-            r"(?i)(?:id\s*(?:no\.?|number|#)|licen[sc]e\s*no\.?|passport\s*no\.?|aadhaar\s*no\.?)\s*[:\|\-\n]?\s*([A-Za-z0-9\s\-]{6,25})",
+            r"(?i)(?:id\s*(?:no\.?|number|#)|licen[sc]e\s*no\.?|passport\s*no\.?)\s*[:\|\-\n]?\s*([A-Za-z0-9\s\-]{6,25})",
             r"\b([A-Z][0-9]{7,8})\b",
             r"\b([2-9][0-9]{3}\s?[0-9]{4}\s?[0-9]{4})\b",
         ],
         "base_confidence": 91.0,
+    },
+    # A labelled Aadhaar is its own field: the number is a full identity key, so
+    # it is named, format-checked and reviewable rather than mixed in with
+    # licence and passport numbers under one generic label.
+    {
+        "field_name": "aadhaar_number",
+        "patterns": [
+            r"(?i)(?:aadhaar\s*(?:no\.?|number|#)|आधार\s*(?:क्र\.?|क्रमांक|नं\.?)|आधार)\s*[:\|\-\n]?\s*([2-9][0-9]{3}\s?[0-9]{4}\s?[0-9]{4})",
+        ],
+        "base_confidence": 93.0,
     },
     {
         "field_name": "date_of_birth",
@@ -613,6 +708,16 @@ def validate_identifier_format(field_name: str, value: str) -> tuple[bool, str |
     elif field_name == "tax_id" and len(val) == 15 and re.match(r"^[0-9]{2}", val):
         if not re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", val):
             return False, f"GSTIN format discrepancy: '{value}' does not match standard 15-character GSTIN structure"
+    elif field_name.startswith("aadhaar"):
+        # Aadhaar is twelve digits and never begins with 0 or 1. A value that
+        # fails that is reported as it was read, never repaired.
+        digits = re.sub(r"[\s\-]", "", val)
+        if not re.match(r"^[2-9][0-9]{11}$", digits):
+            return False, (
+                f"Aadhaar format discrepancy: '{value}' is not a 12-digit identity "
+                "number starting with 2-9; the value shown is what was read, not a "
+                "correction"
+            )
     return True, None
 
 
@@ -638,8 +743,10 @@ def extract_generic_key_value_pairs(
     existing = set(existing_field_names or ())
     results: list[ExtractedFieldData] = []
 
+    # A label is one line of the page: letting it reach across a line break would
+    # name a field after the heading above it.
     kv_pattern = re.compile(
-        r"^[ \t]*([A-Za-z\u0900-\u097F][A-Za-z0-9\u0900-\u097F\s/_\-]{1,35}?)\s*[:=]\s*([^\n\r]{2,100})$",
+        r"^[ \t]*([A-Za-z\u0900-\u097F][A-Za-z0-9\u0900-\u097F/_\- \t]{1,35}?)[ \t]*[:=][ \t]*([^\n\r]{2,100})$",
         re.MULTILINE,
     )
 
@@ -681,80 +788,228 @@ def extract_generic_key_value_pairs(
     return results
 
 
+def _as_table_structure(table: Any) -> Any:
+    """Accept both the live structures and the payloads stored for a page."""
+    from app.services.table_structure import TableStructure, structure_from_payload
+
+    if isinstance(table, TableStructure):
+        return table
+    if isinstance(table, dict):
+        try:
+            return structure_from_payload(table)
+        except (TypeError, ValueError, KeyError):
+            return None
+    return None
+
+
+def _row_confidence(row_cells: list[Any]) -> float | None:
+    """The recogniser's own score for one row, or None when nothing was scored.
+
+    Averaging cells that the engine never measured would turn an absent score into
+    a confident one, so an unmeasured row stays unmeasured.
+    """
+    scored = [
+        cell.confidence
+        for cell in row_cells
+        if cell is not None and cell.confidence is not None
+    ]
+    return round(sum(scored) / len(scored), 2) if scored else None
+
+
+def _header_labels(structure: Any) -> list[str] | None:
+    """Column names from the rows the engine flagged as headers, or None.
+
+    A grid with no header row gets no labels back rather than a guess: promoting
+    its first data row to "headers" would invent labels the page never printed and
+    index them as if the page had.
+    """
+    grid = structure.grid()
+    for row_index in structure.header_rows or []:
+        if not (0 <= row_index < len(grid)):
+            continue
+        labels = [cell.text.strip() if cell is not None else "" for cell in grid[row_index]]
+        if any(labels):
+            return [
+                label or f"column_{index + 1}" for index, label in enumerate(labels)
+            ]
+    return None
+
+
+def _pipe_row_lines(text: str) -> list[list[str]]:
+    """Rows of a `' | '` table the page's text still carries.
+
+    Only a run of lines that agree on their column count is a row structure; a
+    single prose sentence containing a pipe is not one item among many.
+    """
+    rows: list[list[str]] = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if CELL_MARKER not in line:
+            continue
+        cells = [cell.strip() for cell in line.split(CELL_MARKER)]
+        if sum(1 for cell in cells if cell) < 2 or len(cells) < 2:
+            continue
+        rows.append(cells)
+    counts: dict[int, int] = {}
+    for cells in rows:
+        counts[len(cells)] = counts.get(len(cells), 0) + 1
+    if not counts:
+        return []
+    best_width, best_count = max(counts.items(), key=lambda item: (item[1], item[0]))
+    if best_count < 2 or best_width < 2:
+        return []
+    return [cells for cells in rows if len(cells) == best_width]
+
+
+CELL_MARKER = " | "
+
+
 def extract_table_line_items(
     pages: list[ExtractedPage],
 ) -> list[ExtractedFieldData]:
-    """
-    Extract structured table summary and line item metrics across pages.
-    Preserves row/column relationships, headers, and individual line item details.
+    """Line items and headers from the grid rows the pipeline kept.
+
+    A row becomes a field only when a real structure holds it, so a quantity and
+    its rate stay in the columns the page put them in. A refused grid yields
+    nothing: its cells were never stored, and its page's own text is the fallback.
+    Each field cites its page, keeps the row's recogniser score (or says the score
+    was never measured), and is flagged when any cell in the row was unreadable.
     """
     table_fields: list[ExtractedFieldData] = []
     total_line_items = 0
-    extracted_items_count = 0
+    item_count = 0
+    item_confidences: list[float] = []
+    items_uncertain = False
 
     for page in pages:
-        tables = getattr(page, "tables", None) or []
-        for t_idx, tbl in enumerate(tables):
-            headers = tbl.get("headers", [])
-            rows = tbl.get("rows", [])
-            if headers and rows:
-                total_line_items += len(rows)
-                header_str = " | ".join(headers)
+        structures = [
+            structure
+            for structure in (_as_table_structure(t) for t in (getattr(page, "tables", None) or []))
+            if structure is not None
+        ]
+        for t_idx, structure in enumerate(structures):
+            if not structure.cells:
+                continue
+            labels = _header_labels(structure)
+            positional = [
+                f"column_{index + 1}" for index in range(max(0, structure.col_count))
+            ]
+            names = labels if labels is not None else positional
+            header_row_indexes = set(structure.header_rows or [])
+            if labels is not None:
+                heading = " | ".join(label for label in labels if label.strip())
                 table_fields.append(
                     ExtractedFieldData(
                         field_name=f"table_{t_idx + 1}_headers",
-                        field_value=header_str,
-                        confidence=88.0,
+                        field_value=heading,
+                        confidence=structure.confidence,
                         page_number=page.page_number,
-                        original_value=header_str,
-                        corrected_value=header_str,
+                        original_value=heading,
+                        corrected_value=heading,
                         is_verified=False,
                     )
                 )
-                for r_idx, r in enumerate(rows[:10]):
-                    row_str = " | ".join(r)
-                    if len(r) >= 2 and any(r):
-                        extracted_items_count += 1
-                        table_fields.append(
-                            ExtractedFieldData(
-                                field_name=f"line_item_{extracted_items_count}",
-                                field_value=row_str,
-                                confidence=85.0,
-                                page_number=page.page_number,
-                                original_value=row_str,
-                                corrected_value=row_str,
-                                is_verified=False,
-                            )
-                        )
-
-        if not tables and page.text:
-            lines = [l.strip() for l in page.text.split("\n") if " | " in l]
-            if len(lines) >= 2:
-                total_line_items += len(lines) - 1
-                for r_idx, line in enumerate(lines[1:11]):
-                    extracted_items_count += 1
-                    table_fields.append(
-                        ExtractedFieldData(
-                            field_name=f"line_item_{extracted_items_count}",
-                            field_value=line,
-                            confidence=85.0,
-                            page_number=page.page_number,
-                            original_value=line,
-                            corrected_value=line,
-                            is_verified=False,
-                        )
+            for row_index, row in enumerate(structure.grid()):
+                if row_index in header_row_indexes:
+                    continue
+                cells = [cell for cell in row if cell is not None]
+                texts = [
+                    cell.text.strip() if cell is not None else "" for cell in row
+                ]
+                if sum(1 for text in texts if text) < 2:
+                    continue
+                total_line_items += 1
+                item_count += 1
+                named = [
+                    f"{names[index] if index < len(names) else f'column_{index + 1}'}={text}"
+                    for index, text in enumerate(texts)
+                    if text
+                ]
+                value = "; ".join(named) if named else " | ".join(texts)
+                row_conf = _row_confidence(row)
+                row_uncertain = any(cell.uncertain for cell in cells)
+                if row_conf is not None:
+                    item_confidences.append(row_conf)
+                items_uncertain = items_uncertain or row_uncertain
+                table_fields.append(
+                    ExtractedFieldData(
+                        field_name=f"line_item_{item_count}",
+                        field_value=value,
+                        confidence=row_conf,
+                        page_number=page.page_number,
+                        original_value=value,
+                        corrected_value=value,
+                        is_verified=False,
+                        uncertain=row_uncertain,
                     )
+                )
+
+        if any(structure.cells for structure in structures):
+            # A grid that filled its cells owns this page's rows; its lines were
+            # already taken out of the prose.
+            continue
+
+        # Every grid on the page was refused, so the page's own reading is the
+        # only evidence left. Only a run of lines agreeing on its column count
+        # counts as rows.
+        rows = _pipe_row_lines(page.text)
+        if len(rows) < 2:
+            continue
+        page_conf = getattr(page, "confidence", None)
+        conf = round(float(page_conf), 2) if page_conf else None
+        # A scan the recogniser never scored is read-but-unverified; a digital
+        # text layer is the document's own characters, so what it lacks is a
+        # measurement, not a reason to doubt the text.
+        unscored = conf is None and (
+            getattr(page, "page_type", "digital") == "scanned"
+            or getattr(page, "ocr_failed", False)
+        )
+        labels = rows[0]
+        for cells in rows[1:]:
+            total_line_items += 1
+            item_count += 1
+            value = "; ".join(
+                f"{labels[index] if index < len(labels) else f'column_{index + 1}'}={text}"
+                for index, text in enumerate(cells)
+                if text
+            )
+            table_fields.append(
+                ExtractedFieldData(
+                    field_name=f"line_item_{item_count}",
+                    field_value=value,
+                    # The page's own line score backs these characters, or
+                    # nothing measured does: never an invented 85%.
+                    confidence=conf,
+                    page_number=page.page_number,
+                    original_value=value,
+                    corrected_value=value,
+                    is_verified=False,
+                    uncertain=unscored,
+                )
+            )
+            if unscored:
+                items_uncertain = True
+            if conf is not None:
+                item_confidences.append(conf)
 
     if total_line_items > 0:
+        # A count is only as trustworthy as the rows it counts: it inherits their
+        # measured confidence, and says nothing was measured when none was.
+        count_conf = (
+            round(sum(item_confidences) / len(item_confidences), 2)
+            if item_confidences
+            else None
+        )
         table_fields.append(
             ExtractedFieldData(
                 field_name="line_items_count",
                 field_value=str(total_line_items),
-                confidence=90.0,
+                confidence=count_conf,
                 page_number=1,
                 original_value=str(total_line_items),
                 corrected_value=str(total_line_items),
                 is_verified=False,
+                uncertain=items_uncertain,
             )
         )
     return table_fields
@@ -902,8 +1157,13 @@ def extract_document_report(
             seen_field_keys.add(tf.field_name)
 
     # Compute overall document confidence
-    # Weighted combination of OCR quality, field quality and classification
-    field_confidences = [f.confidence for f in all_fields]
+    # Weighted combination of OCR quality, field quality and classification.
+    # A field whose value nothing was scored against (digital text layer, an
+    # unscored grid slot) is left out of the average rather than counted as a
+    # perfect or a zero read.
+    field_confidences = [
+        f.confidence for f in all_fields if f.confidence is not None
+    ]
     signals: list[tuple[float, float]] = []
     if ocr_result.overall_ocr_confidence:
         signals.append((0.35, ocr_result.overall_ocr_confidence))
@@ -991,11 +1251,40 @@ def extract_document_report(
         requires_review = True
         review_reasons.append("Potential total amount conflict (Total is 0.00 while subtotal is non-zero)")
 
-    # If any extracted field has very low confidence (< 60.0%)
-    low_conf_fields = [f.field_name for f in all_fields if f.confidence < 60.0]
+    # If any extracted field has very low confidence (< 60.0%). An unmeasured
+    # confidence is not a low one, so it never lands here.
+    low_conf_fields = [
+        f.field_name
+        for f in all_fields
+        if f.confidence is not None and f.confidence < 60.0
+    ]
     if low_conf_fields:
         requires_review = True
         review_reasons.append(f"Low confidence on fields: {', '.join(low_conf_fields)}")
+
+    # Present-but-unreadable values: a cell no engine resolved, or a row rebuilt
+    # from prose with nothing measured behind it. Never guessed, never dropped.
+    uncertain_fields = [f.field_name for f in all_fields if f.uncertain]
+    if uncertain_fields:
+        requires_review = True
+        listed = ", ".join(uncertain_fields[:8])
+        review_reasons.append(
+            f"{len(uncertain_fields)} field(s) hold values that could not be read "
+            f"or checked against the page: {listed}"
+        )
+
+    unmeasured_fields = [
+        f.field_name
+        for f in all_fields
+        if f.confidence is None and not f.uncertain
+    ]
+    if unmeasured_fields and requires_review:
+        # Only worth stating on a document a reviewer is already looking at: a
+        # digital text layer is exact characters, it simply has no score.
+        review_reasons.append(
+            f"{len(unmeasured_fields)} field(s) carry the document's own characters "
+            "with no accuracy score measured for them"
+        )
 
     final_reason = "; ".join(review_reasons) if review_reasons else None
 

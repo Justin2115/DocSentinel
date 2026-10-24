@@ -8,12 +8,16 @@ extractive answer, which is reported under its own engine name.
 """
 from __future__ import annotations
 
+import http.client
+import io
 import json
 import logging
 import re
+import socket
+import threading
 import time
 import urllib.error
-import urllib.request
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +29,20 @@ logger = logging.getLogger(__name__)
 # reloading the server.
 _STATUS_TTL_SECONDS = 20.0
 _status_cache: dict[str, Any] = {"checked_at": 0.0, "payload": None}
+
+# How much of the body to ask for per read. The read loop is what makes the
+# generation budget a deadline rather than an inactivity timer, so it has to be
+# able to come back with a partial body.
+_READ_BYTES = 65536
+
+# Longest wait a single read may take before the deadline is re-checked. Small
+# enough that a server which dribbles bytes cannot push the check far out, large
+# enough that a normal response costs one or two reads.
+_READ_SLICE_SECONDS = 0.25
+
+# How often the deadline guard wakes. It exists because one abandon attempt is not
+# a guarantee - see _guard.
+_GUARD_TICK_SECONDS = 0.05
 
 # Only the question is trusted. Text from an uploaded document is placed inside a
 # marked block and explicitly demoted to data, because a scanned page can contain
@@ -53,6 +71,14 @@ class OllamaUnavailable(Exception):
     """Raised when the local runtime or the configured model cannot be used."""
 
 
+class GenerationTimeout(TimeoutError):
+    """The request passed its wall-clock budget and the connection was closed.
+
+    Subclass of ``TimeoutError`` so existing callers that treat any transport
+    failure as "fall back to the extractive answer" keep working unchanged.
+    """
+
+
 def configured_model() -> str:
     return (settings.OLLAMA_MODEL or "").strip()
 
@@ -62,20 +88,203 @@ def base_url() -> str:
 
 
 def _post(path: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
-    request = urllib.request.Request(
-        base_url() + path,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return _request(path, method="POST", payload=payload, timeout=timeout)
 
 
 def _get(path: str, timeout: float) -> dict[str, Any]:
-    request = urllib.request.Request(base_url() + path, method="GET")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return _request(path, method="GET", payload=None, timeout=timeout)
+
+
+def _breach(
+    method: str, path: str, budget: float, exc: BaseException | None = None
+) -> GenerationTimeout:
+    detail = f": {exc}" if exc is not None else ""
+    return GenerationTimeout(
+        f"Ollama {method} {path} exceeded its {budget:g}s wall-clock budget{detail}"
+    )
+
+
+def _abandon(connection: http.client.HTTPConnection) -> None:
+    """Close the socket from the watchdog so a blocked read raises at the deadline.
+
+    ``close()`` alone does not wake a thread parked in ``recv`` on Windows;
+    ``shutdown`` does. Both are best-effort - the socket may already be gone.
+    """
+    sock = getattr(connection, "sock", None)
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+def _guard(
+    connection: http.client.HTTPConnection,
+    deadline: float,
+    headers_done: threading.Event,
+    stop: threading.Event,
+) -> None:
+    """Hold one call to its deadline from another thread, while the caller is parked.
+
+    The caller cannot police the phases it is blocked inside: connect, send and the
+    status-line/headers read run in one library call that returns only when the
+    server has finished talking. Two things are done here, in order:
+
+    Before the deadline, the socket timeout is re-armed to the time *genuinely
+    left*. The timeout http.client set for us is the whole budget, and a per-read
+    inactivity timer restarts on every read, so a server that sends a byte now and
+    then can postpone the moment the socket gives up indefinitely - the exact leak
+    that held one production turn open for 377,467 ms. Shrinking it to what is left
+    turns it into a countdown instead. It is deliberately not shrunk below that: a
+    model that is still loading sends nothing at all for tens of seconds, and a
+    slice-sized timer would abort a healthy wait long before its budget.
+
+    At and after the deadline the socket is abandoned on every tick, not once. A
+    single attempt can be lost - it may find no socket yet, or a shutdown may fail
+    to wake a read that is parked - and then nothing but the inactivity timer is
+    left to end the call. Measured on the delivered one-shot version, three qwen
+    calls stopped within 23 ms of their 90 s budget while a fourth ran 111,365 ms,
+    21 s past it. Re-asserting costs one tick, so a lost attempt cannot cost the
+    wait.
+
+    Once the caller is turning over the body itself it owns the socket timeout - it
+    re-arms per slice and checks the deadline between slices - so this thread stops
+    clamping and only abandons.
+    """
+    while not stop.wait(_GUARD_TICK_SECONDS):
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            if headers_done.is_set():
+                continue
+            sock = getattr(connection, "sock", None)
+            if sock is None:
+                continue
+            try:
+                sock.settimeout(max(remaining, 0.001))
+            except OSError:
+                pass
+            continue
+        _abandon(connection)
+
+
+def _request(
+    path: str,
+    *,
+    method: str,
+    payload: dict[str, Any] | None,
+    timeout: float,
+) -> dict[str, Any]:
+    """Call the local runtime under a real wall-clock deadline.
+
+    ``urllib.request.urlopen(timeout=…)`` is a per-operation socket inactivity
+    timer, and it is re-armed by every byte that arrives. Ollama sends newline
+    keep-alives while a generation sits in its queue, so a 90 s budget is not a
+    bound on the wait: one recorded production turn stayed open 377,467 ms before
+    finally reporting a transport error, holding the chat request with it.
+
+    Bounding only the body read is not enough either - a measured run of this
+    module's own first version spent 296,579 ms in a single call, because connect,
+    send and the status-line/headers read each got the whole budget again. So the
+    deadline is enforced from two sides: the read loop below may wait only for the
+    time that is genuinely left on every slice it takes, and _guard re-arms the
+    socket timeout to that same remaining time during the phases the loop cannot
+    see, then abandons the connection until the call ends. The connection is closed
+    on the way out whether the call succeeded, timed out or failed.
+    """
+    budget = max(float(timeout), 0.001)
+    deadline = time.monotonic() + budget
+    url = base_url() + path
+    parts = urllib.parse.urlsplit(url)
+    connection: http.client.HTTPConnection = (
+        http.client.HTTPSConnection(parts.netloc, timeout=budget)
+        if parts.scheme == "https"
+        else http.client.HTTPConnection(parts.netloc, timeout=budget)
+    )
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers_done = threading.Event()
+    stop = threading.Event()
+    guard = threading.Thread(
+        target=_guard,
+        args=(connection, deadline, headers_done, stop),
+        daemon=True,
+        name="ollama-deadline-guard",
+    )
+    try:
+        guard.start()
+        try:
+            connection.request(
+                method,
+                parts.path or "/",
+                body=body,
+                headers={"Content-Type": "application/json"} if body else {},
+            )
+            response = connection.getresponse()
+        except OSError as exc:
+            # Connect, send, or the status-line/headers read gave up. Only a call
+            # that is past its deadline is a budget miss: a refused connection has
+            # to keep looking like an unavailable runtime, which is the case the
+            # caller reads as "Ollama is stopped" rather than "this question was too
+            # slow".
+            if time.monotonic() >= deadline:
+                raise _breach(method, path, budget, exc) from exc
+            raise
+        headers_done.set()
+        raw = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _breach(method, path, budget)
+            if connection.sock is not None:
+                # The socket timer is re-armed to the time that is genuinely left,
+                # and never for longer than one slice, so bytes arriving on a fixed
+                # cadence can postpone a read but not the deadline.
+                connection.sock.settimeout(min(remaining, _READ_SLICE_SECONDS))
+            try:
+                # read1 returns what has arrived instead of waiting to fill the
+                # buffer: a blocking read() would sit inside one call for as long as
+                # the server dribbles bytes, and no deadline check could run.
+                piece = response.read1(_READ_BYTES)
+            except TimeoutError:
+                if time.monotonic() >= deadline:
+                    raise _breach(method, path, budget) from None
+                continue
+            except OSError as exc:
+                # Same rule as the transport phases: a socket error after the
+                # deadline is the budget being enforced, because that is the guard
+                # abandoning the connection. Before it, the server really did break
+                # the connection, and reporting that as "this question was too slow"
+                # would hide a transport failure behind a budget one.
+                if time.monotonic() >= deadline:
+                    raise _breach(method, path, budget, exc) from exc
+                raise
+            if not piece:
+                break
+            raw.extend(piece)
+
+        if not 200 <= response.status < 300:
+            raise urllib.error.HTTPError(
+                url,
+                response.status,
+                response.reason or "",
+                response.headers,
+                io.BytesIO(bytes(raw)),
+            )
+    finally:
+        stop.set()
+        # The guard sleeps at most one tick between checks, so this returns promptly;
+        # the timeout only keeps a starved thread from delaying the caller.
+        guard.join(timeout=1.0)
+        connection.close()
+
+    decoded = bytes(raw).decode("utf-8", "replace").strip()
+    if not decoded:
+        raise OllamaUnavailable(f"Ollama {method} {path} returned an empty body")
+    return json.loads(decoded)
 
 
 def list_models() -> list[str] | None:
@@ -95,6 +304,16 @@ def list_models() -> list[str] | None:
         if name:
             names.append(name)
     return names
+
+
+def _is_installed(model: str, installed: list[str]) -> bool:
+    """Whether this exact model can be run.
+
+    An unqualified name means its ":latest" tag, and nothing else. Matching on the
+    family instead would report qwen3:4b as available when only qwen3:8b is on the
+    disk, and generation would then fail while the status said it was ready.
+    """
+    return model in installed or f"{model}:latest" in installed
 
 
 def provider_status(force: bool = False) -> dict[str, Any]:
@@ -123,10 +342,7 @@ def provider_status(force: bool = False) -> dict[str, Any]:
         payload["reachable"] = installed is not None
         payload["available_models"] = installed or []
         if installed is not None:
-            payload["model_installed"] = any(
-                name == model or name.split(":")[0] == model.split(":")[0]
-                for name in installed
-            )
+            payload["model_installed"] = _is_installed(model, installed)
             if not payload["model_installed"]:
                 payload["reason"] = f"model {model!r} is not installed locally"
     if not payload["reachable"] and not payload["reason"]:
@@ -198,6 +414,35 @@ def build_prompt(
 
 _ANSWER_MARKER = re.compile(r"EVIDENCE\s*[:=]\s*([0-9,\s]+)", re.IGNORECASE)
 
+# A reasoning model that runs out of budget mid-thought delivers text about the
+# task instead of an answer about the document, and it quotes the passage
+# numbering the application invented - which no document contains. The quote gate
+# accepts such text, because a scratchpad quotes exactly the passage it is
+# describing, so this is the only thing between it and the chat window. Matched on
+# the opening of the reply only: a real answer may mention a passage in passing.
+_REASONING_PREAMBLE = re.compile(
+    r"\bwe are given\b"
+    r"|\b(?:the|these|above) (?:evidence )?passages? (?:are|above|numbered|say|state)\b"
+    r"|\bnumbered (?:evidence )?passages?\b"
+    r"|\bpassages?\s*\[\s*\d+\s*\]"
+    r"|\[\s*\d+\s*\]\s*(?:says|states|reads|given|:)"
+    r"|\bi (?:need|must|have|will|am going) to (?:understand|answer|find|look|determine)\b"
+    r"|\blet me (?:think|first|now)\b"
+    r"|\bfirst,? i\b"
+    r"|\bin order to answer\b"
+    r"|\bmust answer only from\b"
+    r"|\bstep[- ]by[- ]step\b"
+    r"|\bas an ai\b"
+    r"|\bmy reasoning\b|\breasoning process\b",
+    re.IGNORECASE,
+)
+_REASONING_SCAN_CHARS = 400
+
+
+def _looks_like_reasoning(text: str) -> bool:
+    """Whether the reply opens by talking about the task rather than answering it."""
+    return bool(_REASONING_PREAMBLE.search((text or "")[:_REASONING_SCAN_CHARS]))
+
 
 def _parse_indices(text: str, count: int) -> tuple[int, ...]:
     match = _ANSWER_MARKER.search(text or "")
@@ -239,6 +484,11 @@ def generate_answer(
                 # verify_quotes() and the numeric evidence check have seen the whole
                 # text, so partial tokens could not be shown as a grounded answer.
                 "stream": False,
+                # Sent for every model, not only reasoning ones: a top-level field
+                # this server does not know is ignored, and a model that answers
+                # after a scratchpad would otherwise spend the whole token budget
+                # on the scratchpad and return an empty answer.
+                "think": bool(settings.OLLAMA_THINKING),
                 "options": {
                     "temperature": 0.0,
                     "num_ctx": settings.OLLAMA_NUM_CTX,
@@ -247,6 +497,16 @@ def generate_answer(
             },
             settings.OLLAMA_GENERATE_TIMEOUT,
         )
+    except GenerationTimeout as exc:
+        # The provider itself is fine - this generation simply cost more than the
+        # budget says a chat turn may. Clearing the status cache here would make
+        # one slow question look like a broken runtime.
+        logger.warning(
+            "Ollama generation stopped by the wall-clock budget (asked %s): %s",
+            model,
+            exc,
+        )
+        return None
     except urllib.error.HTTPError as exc:
         body = ""
         try:
@@ -264,7 +524,41 @@ def generate_answer(
         return None
 
     text = str(data.get("response") or "").strip()
-    if not text or "INSUFFICIENT_EVIDENCE" in text.upper():
+    # What the server says it ran, logged before the evidence gates get a chance to
+    # reject the answer: an audit of which model produced a reply must not depend on
+    # that reply being accepted, and this carries no document content.
+    reported_model = str(data.get("model") or model)
+    logger.info(
+        "Ollama generation finished: asked %s, reported %s, %s prompt / %s output tokens",
+        model,
+        reported_model,
+        data.get("prompt_eval_count"),
+        data.get("eval_count"),
+    )
+    if not text:
+        # A reasoning model that ran out of budget mid-scratchpad answers nothing:
+        # the scratchpad is not a grounded answer and is never mined for one.
+        if str(data.get("thinking") or "").strip():
+            logger.warning(
+                "Ollama model %s returned reasoning but no answer; raising "
+                "OLLAMA_MAX_NEW_TOKENS or leaving OLLAMA_THINKING off",
+                model,
+            )
+        return None
+    if "INSUFFICIENT_EVIDENCE" in text.upper():
+        return None
+    if _looks_like_reasoning(text):
+        # The reply describes the retrieval harness rather than the document. A
+        # model that runs out of budget mid-thought leaves exactly this behind, and
+        # the quote gate accepts it, because a scratchpad quotes the passage it is
+        # talking about - so nothing else stands between it and the chat window.
+        logger.warning(
+            "Ollama model %s returned an analysis preamble instead of an answer; "
+            "discarding (budget %s tokens, used %s)",
+            model,
+            settings.OLLAMA_MAX_NEW_TOKENS,
+            data.get("eval_count"),
+        )
         return None
     answer = _ANSWER_MARKER.sub("", text).strip()
     if not answer:
@@ -272,9 +566,22 @@ def generate_answer(
     return LLMAnswer(
         text=answer,
         evidence_indices=_parse_indices(text, len(evidence_blocks)),
-        model=model,
+        # The server names the model it actually ran, which is the only version of
+        # that claim the notes should make.
+        model=reported_model,
         latency_ms=int((time.perf_counter() - started) * 1000),
-        raw={key: data[key] for key in ("total_duration", "eval_count") if key in data},
+        raw={
+            key: data[key]
+            for key in (
+                "total_duration",
+                "load_duration",
+                "prompt_eval_count",
+                "prompt_eval_duration",
+                "eval_count",
+                "eval_duration",
+            )
+            if key in data
+        },
     )
 
 

@@ -23,6 +23,7 @@ from app.services.table_structure import (
     from_pymupdf_table,
     from_ruled_grid,
 )
+from app.services.table_quality import screen as screen_structures
 
 logger = logging.getLogger(__name__)
 
@@ -868,6 +869,10 @@ def process_image_document(
             # The image the accepted text was read from: escalation can deskew or
             # rotate it, and the table model has to see the same frame.
             ocr_image = img
+            # Which quarter turn, if any, the frame the text was read from is
+            # rotated by. A turn is invertible, so the cell boxes it produces can
+            # be put back on the page the viewer shows.
+            read_rotation: int | None = None
 
             # Escalation on low-quality, vertical or rotated scans
             vertical_boxes = _boxes_imply_vertical_text(ocr_lines)
@@ -899,6 +904,7 @@ def process_image_document(
                             detected_lang = alt_lang
                             ocr_lines = alt_lines
                             ocr_image = rot_img
+                            read_rotation = rot
                             break
 
             # Ruled table extraction if image has table lines
@@ -913,12 +919,12 @@ def process_image_document(
                         ocr_lines=ocr_lines,
                         page_number=1,
                     )
-                    if ocr_image is not img:
-                        for structure in image_tables:
-                            structure.add_note(
-                                "cell boxes are in the deskewed or rotated "
-                                "frame the text was read from"
-                            )
+                    _place_grid_on_page(
+                        image_tables,
+                        read_rotation,
+                        ocr_image is not img and read_rotation is None,
+                        (width, height),
+                    )
                     t_lines = _table_text_lines(
                         image_tables, 1, marker="scanned-table"
                     )
@@ -978,14 +984,17 @@ def _extract_page_tables(
 ) -> tuple[list[Any], list[Any]]:
     """Read ruled/contour tables from a digital PDF page via PyMuPDF.
 
-    Returns (table structures, table bounding rects). Each structure keeps the
+    Returns (table structures to keep, table bounding rects). Each structure keeps the
     grid coordinate, bounding box, span and header flag of every cell, so the row
     and column associations survive without re-deriving them from text. An empty
     digital cell is stored empty: the text layer is authoritative and nothing is
     invented for it.
+
+    A grid that contradicts itself is not kept as a table: it is replaced by a
+    record that says why, and only the accepted grid's rectangle is excluded from
+    the page's prose, so the text of a refused table is never lost.
     """
-    structures: list[Any] = []
-    rects: list[Any] = []
+    measured: list[tuple[Any, Any]] = []
     try:
         tables = pdf_page.find_tables()
         try:
@@ -996,15 +1005,28 @@ def _extract_page_tables(
             rows = table.extract()
             if not rows:
                 continue
-            rects.append(table.bbox)
             structure = from_pymupdf_table(pdf_page, table, rows, page_words)
             for cell in structure.cells:
                 cell.text = normalize_devanagari_text(cell.text)
-            structures.append(structure)
+            measured.append((structure, table.bbox))
     except Exception as e:
         logger.debug(f"Table extraction skipped on page {getattr(pdf_page, 'number', '?')}: {e}")
         return [], []
-    return structures, rects
+    rect = getattr(pdf_page, "rect", None)
+    page_size = (
+        (float(rect.width), float(rect.height)) if rect is not None else None
+    )
+    screening = screen_structures(
+        [structure for structure, _ in measured],
+        page_size=page_size,
+        page_lines=len(page_words),
+    )
+    rects = [
+        bbox
+        for (structure, bbox), decision in zip(measured, screening.decisions)
+        if decision.accept and bbox is not None
+    ]
+    return screening.kept, rects
 
 
 def _table_text_lines(
@@ -1879,6 +1901,68 @@ def _lines_outside_structures(
     return kept
 
 
+def _rotation_box_map(rot: int, page_size: tuple[int, int]):
+    """Map a box read from a page turned by `rot` back onto the untouched page.
+
+    `img.rotate(-rot, expand=True)` is a quarter turn, so its inverse is arithmetic
+    rather than an approximation: a grid measured after the turn lands on the page
+    the viewer shows, instead of pointing at coordinates nothing displays.
+    """
+    width, height = float(page_size[0]), float(page_size[1])
+
+    def mapped(box: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        x1, y1, x2, y2 = (float(value) for value in box)
+        if rot == 90:
+            return (y1, height - x2, y2, height - x1)
+        if rot == 180:
+            return (width - x2, height - y2, width - x1, height - y1)
+        if rot == 270:
+            return (width - y2, x1, width - y1, x2)
+        return (x1, y1, x2, y2)
+
+    return mapped
+
+
+def _place_grid_on_page(
+    structures: list[Any],
+    rot: int | None,
+    deskewed: bool,
+    page_size: tuple[int, int],
+) -> None:
+    """Put a page's grids into the frame the viewer shows, and say when it cannot.
+
+    A quarter turn inverts exactly. A deskew angle nothing recorded cannot be
+    inverted, so its boxes stay where they were measured and the structure reports
+    the frame it is in - cells and the lines that filled them share that frame, so
+    the grid stays readable, and only an image overlay would need more.
+    """
+    for structure in structures:
+        if rot is not None:
+            # A refused record keeps no cells but still carries the area it was
+            # measured over; an overlay drawn from it would point elsewhere.
+            if structure.cells or structure.bbox is not None:
+                structure.remap_boxes(_rotation_box_map(rot, page_size))
+        elif deskewed and (structure.cells or structure.bbox is not None):
+            structure.frame = "corrected"
+            structure.add_note(
+                "cell boxes are in the deskewed frame the text was read from"
+            )
+
+
+def _chars_in_region(
+    page_items: list[Any], bbox: tuple[float, float, float, float] | None
+) -> int:
+    """Characters the reader produced inside one grid's own area of the page."""
+    if bbox is None:
+        return 0
+    x1, y1, x2, y2 = (float(value) for value in bbox)
+    total = 0
+    for centre_x, centre_y, text, _score, _box in page_items:
+        if x1 <= centre_x <= x2 and y1 <= centre_y <= y2:
+            total += len(text.strip())
+    return total
+
+
 def _extract_scanned_tables(
     image: Image.Image,
     devanagari_ocr: bool,
@@ -1901,6 +1985,11 @@ def _extract_scanned_tables(
     rows but not the coordinates, and the structure says so. Per-cell crops are
     never OCR'd: each crop re-ran detection and cost tens of seconds on CPU
     (rows=6 measured at 744s/page).
+
+    Nothing here decides whether a grid is worth showing: `app.services.table_quality`
+    does, on measurements of the grid against the page it was read from. A refused
+    grid comes back as a record with no cells, so it takes nothing out of the page's
+    own text and shows the reader why it is not a table.
 
     One table failing to parse never discards the others, and the caller keeps the
     page's OCR text whichever way this goes.
@@ -1964,7 +2053,20 @@ def _extract_scanned_tables(
             if structure is not None and structure.cells:
                 structures.append(structure)
 
-    return structures, max(len(structures), len(tables))
+    # Nothing above decides whether a grid is worth showing: the quality gate does,
+    # on measurements of the grid itself. A refused grid is replaced by a record that
+    # says why, keeps no cells, and so takes no line out of the page's own text.
+    region_chars = {
+        id(structure): _chars_in_region(page_items, structure.bbox)
+        for structure in structures
+    }
+    screening = screen_structures(
+        structures,
+        page_size=(float(image.width), float(image.height)),
+        region_chars_for=lambda structure: region_chars.get(id(structure)),
+        page_lines=len(page_items),
+    )
+    return screening.kept, max(len(structures), len(tables))
 
 
 def _extract_page_layout_text(pdf_page: Any, exclude_rects: list[Any] | None = None) -> str:
@@ -2211,6 +2313,11 @@ def process_pdf_document(
                 # can deskew or rotate it, and the table model has to look at the
                 # same frame or its cell boxes match nothing.
                 ocr_image: Image.Image | None = None
+                # The turn or slant that frame differs from the page render by. A
+                # quarter turn is inverted exactly; a deskew angle is not recorded
+                # anywhere, so its grid says which frame it is in.
+                read_rotation: int | None = None
+                read_deskewed = False
                 try:
                     with stage("page.render", page=page_num):
                         pix = pdf_page.get_pixmap(dpi=200)
@@ -2265,10 +2372,15 @@ def process_pdf_document(
                                                 f"{alt_engine}-Preprocessed",
                                                 alt_lang,
                                             )
-                                            # Boxes come from the transformed image;
-                                            # table extraction re-runs its own pass.
-                                            ocr_lines = None
+                                            # The lines the deskewed image produced
+                                            # are kept: they are in that image's own
+                                            # frame, which is the frame the table
+                                            # model is about to measure, so a cell
+                                            # can be checked against the text the
+                                            # page read instead of left to the model.
+                                            ocr_lines = alt_lines
                                             ocr_image = prepared
+                                            read_deskewed = True
                                     payload["chars"] = len(ocr_text.strip())
 
                             if vertical_boxes or len(ocr_text.strip()) < 10:
@@ -2281,7 +2393,7 @@ def process_pdf_document(
                                             alt_conf,
                                             alt_engine,
                                             alt_lang,
-                                            _rot_lines,
+                                            alt_lines,
                                         ) = _perform_image_ocr(rot_img, language=language)
                                         if len(alt_text.strip()) >= 10 and alt_conf >= 55.0:
                                             ocr_text, ocr_conf, ocr_engine, det_lang = (
@@ -2290,10 +2402,13 @@ def process_pdf_document(
                                                 f"{alt_engine}-Rot{rot}",
                                                 alt_lang,
                                             )
-                                            # Rotated geometry does not map to the
-                                            # original page image.
-                                            ocr_lines = None
+                                            # The turned image's own lines are kept
+                                            # with the turned image: cells and text
+                                            # stay in one frame, and a quarter turn
+                                            # is mapped back onto the page later.
+                                            ocr_lines = alt_lines
                                             ocr_image = rot_img
+                                            read_rotation = rot
                                             payload["rotation"] = rot
                                             break
                                     payload["chars"] = len(ocr_text.strip())
@@ -2328,15 +2443,6 @@ def process_pdf_document(
                                 ocr_lines=ocr_lines,
                                 page_number=page_num,
                             )
-                            if ocr_image is not img:
-                                # The boxes belong to the corrected frame, not to
-                                # the untouched page render; say so rather than
-                                # letting a viewer treat them as page coordinates.
-                                for structure in page_tables:
-                                    structure.add_note(
-                                        "cell boxes are in the deskewed or rotated "
-                                        "frame the text was read from"
-                                    )
                             scanned_table_lines = _table_text_lines(
                                 page_tables, page_num, marker="scanned-table"
                             )
@@ -2347,12 +2453,16 @@ def process_pdf_document(
                             payload["cells_uncertain"] = sum(
                                 s.uncertain_cells for s in page_tables
                             )
+                            payload["cells_read"] = sum(
+                                s.page_backed_cells for s in page_tables
+                            )
                             # Every line the grid claimed is rendered from its cell,
                             # so it must not also go through the geometric
                             # reconstruction: that put a second, differently grouped
                             # copy of each row beside the structure that had just
                             # measured it, and both were indexed. What is left over -
                             # the prose outside the ruling - is still reconstructed.
+                            # A refused grid has no cells, so it takes nothing here.
                             if page_tables and ocr_lines is not None:
                                 leftover = _lines_outside_structures(
                                     ocr_lines, page_tables
@@ -2363,6 +2473,12 @@ def process_pdf_document(
                                     )
                                     page_prose = prose
                                     payload["prose_lines"] = len(leftover)
+                            _place_grid_on_page(
+                                page_tables,
+                                read_rotation,
+                                read_deskewed and read_rotation is None,
+                                (img.width, img.height),
+                            )
                     except Exception as table_err:
                         logger.warning(
                             f"Table extraction failed on page {page_num} of {file_path}: {table_err}; preserving recognized OCR text"

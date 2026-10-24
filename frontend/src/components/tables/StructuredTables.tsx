@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { ExtractedTableCell, ExtractedTable } from "../../api/document";
+import { isRejectedTable } from "../../api/document";
 import { formatConfidence } from "../../utils/confidence";
 
 // The reader indexes a measured table as "[table p3]" followed by "cell | cell"
@@ -11,8 +12,8 @@ const TABLE_BLOCK_MARKER = /^\[(?:scanned-)?table p\d+\]$/;
 /**
  * Remove the "cell | cell" rows that are about to be rendered as a real table.
  *
- * Only called when the page has stored structures: with none, the raw text stays
- * exactly as it was read, markers included, and that is the fallback.
+ * Only the pages with a measured grid are rewritten this way: a refused grid has no
+ * cells to render, so its page keeps every line the reader recognised.
  */
 export const stripTableBlocks = (text: string): string => {
 	const kept: string[] = [];
@@ -106,11 +107,21 @@ export const StructuredTable = ({
 					]
 						.filter(Boolean)
 						.join(" ");
-					const title = slot.uncertain
+					const score = slot.uncertain
 						? "The reader could not tell what belongs in this cell. Nothing has been filled in."
 						: typeof slot.confidence === "number"
 							? formatConfidence(slot.confidence) + " word confidence"
 							: undefined;
+					// On a scanned page, text no recognised line fell inside is a reading
+					// nothing on the page confirms. A digital text layer is the page's own
+					// characters, so the absence of an OCR score says nothing about it.
+					const backing =
+						slot.text.trim() &&
+						slot.from_page === false &&
+						table.source !== "digital"
+							? " · no line on the page confirmed this text"
+							: "";
+					const title = score ? score + backing : backing.slice(3) || undefined;
 					const content =
 						slot.uncertain && !slot.text.trim()
 							? "unreadable"
@@ -163,6 +174,14 @@ export const StructuredTable = ({
 				{table.uncertain_cells
 					? ` · ${table.uncertain_cells} unreadable cell(s)`
 					: ""}
+				{table.source !== "digital" &&
+				table.page_backed_cells === 0 &&
+				table.cells.length > 0
+					? " · no cell confirmed by the page's own text"
+					: ""}
+				{table.frame === "corrected"
+					? " · cell boxes are measured on a corrected view of the page"
+					: ""}
 			</caption>
 			{headRows.length > 0 ? (
 				<thead>{headRows.map(rowElement)}</thead>
@@ -193,8 +212,45 @@ export const PageStructuredTables = ({
 	highlight?: (text: string) => ReactNode;
 }) => (
 	<div className="ocrTables">
-		{tables.map((table) => (
-			<StructuredTable key={table.id} table={table} highlight={highlight} />
-		))}
+		{tables.map((table) =>
+			isRejectedTable(table) ? (
+				<RejectedTableNotice key={table.id} table={table} />
+			) : (
+				<StructuredTable
+					key={table.id}
+					table={table}
+					highlight={highlight}
+				/>
+			)
+		)}
 	</div>
 );
+
+/**
+ * A grid the reader measured and refused to show as a table.
+ *
+ * The shape, the engine and the reason are the measurement, and they are worth
+ * reporting; an empty grid is not. The page's own recognised text stays below this,
+ * because a refused grid never takes lines out of the page's prose.
+ */
+export const RejectedTableNotice = ({ table }: { table: ExtractedTable }) => {
+	const shape =
+		table.row_count && table.col_count
+			? `${table.row_count} × ${table.col_count} grid`
+			: "grid";
+	const reason = (table.note ?? "").replace(/^Not shown as a table:\s*/, "");
+	return (
+		<div className="ocrTableRefused" role="note">
+			<strong>Table not shown</strong>
+			<span>
+				{shape}
+				{table.engine ? ` · ${table.engine}` : ""} · no cells to show ·
+				confidence not measured
+			</span>
+			<p>
+				{reason ||
+					"the grid could not be checked against the page, so it is not shown as a table."}
+			</p>
+		</div>
+	);
+};

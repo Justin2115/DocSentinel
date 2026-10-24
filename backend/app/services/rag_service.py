@@ -223,11 +223,41 @@ def _split_multipart_question(question: str) -> list[str]:
     return [cleaned]
 
 
+_SENTENCE_TERMINATOR = re.compile(r"[.!?।॥:]\s*$")
+_LOWERCASE_START = re.compile(r"[a-zà-˿]")
+
+
+def _join_wrapped_lines(lines: list[str]) -> list[str]:
+    """Re-join an OCR line that is only half a sentence with the line ending it.
+
+    OCR emits one text box per detected line, so a sentence the typesetter wrapped
+    arrives split with no punctuation on the first part. Treating each line as a
+    whole thought is what made an evidence sentence stop at "in accordance with the
+    laws" while "of the Republic of Indonesia." sat in the next one. Continuation is
+    recognised structurally, never by content: the previous line carries no sentence
+    terminator and the next one begins in lower case, so a heading, a numbered item
+    or a label keeps its own boundary.
+    """
+    joined: list[str] = []
+    for line in lines:
+        if (
+            joined
+            and not _SENTENCE_TERMINATOR.search(joined[-1])
+            and _LOWERCASE_START.match(line)
+        ):
+            joined[-1] = f"{joined[-1]} {line}"
+            continue
+        joined.append(line)
+    return joined
+
+
 def _extract_sentences(text: str) -> list[str]:
     """Break text into sentences or clauses, pairing key-value OCR lines."""
     if not text:
         return []
-    raw_lines = [line.strip() for line in re.split(r"[\n\r]+", text) if line.strip()]
+    raw_lines = _join_wrapped_lines(
+        [line.strip() for line in re.split(r"[\n\r]+", text) if line.strip()]
+    )
     merged_lines: list[str] = []
     i = 0
 

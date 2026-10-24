@@ -440,6 +440,32 @@ class ExtractedTable(Base):
         nullable=True,
     )
 
+    @property
+    def page_backed_cells(self) -> int:
+        """Cells of this row that hold text the page itself produced.
+
+        Derived from the stored cells rather than kept as a column, so a grid
+        written before the count existed still reports its own true one instead of
+        a default.
+        """
+        return sum(
+            1
+            for cell in self.cells or []
+            if cell.get("from_page") and (cell.get("text") or "").strip()
+        )
+
+    @property
+    def frame(self) -> str:
+        """Which image this row's cell boxes belong to.
+
+        "page" is the page as it is displayed. "corrected" means the boxes came
+        from a deskewed or otherwise transformed render of the page, which is what
+        the note records; an overlay drawn on the displayed page from those boxes
+        would point at the wrong place.
+        """
+        note = self.note or ""
+        return "corrected" if "deskewed frame" in note else "page"
+
     # Relationships
     document: Mapped["Document"] = relationship(
         "Document",
