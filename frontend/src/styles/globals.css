@@ -2138,7 +2138,7 @@ body.previewOpen {
   padding:5px 6px 5px 9px;
   border:1px solid var(--border);
   border-radius:9px;
-  background:#F5F7F6;
+  background:var(--surface-secondary);
   color:var(--text-secondary);
   font-size:11px;
 }
@@ -2153,7 +2153,7 @@ body.previewOpen {
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
-  color:var(--text);
+  color:var(--text-primary);
   font-weight:600;
 }
 
@@ -2162,10 +2162,16 @@ body.previewOpen {
   border:1px solid var(--border);
   border-radius:5px;
   padding:1px 5px;
-  background:white;
+  background:var(--surface);
   font-size:9px;
   letter-spacing:.03em;
   white-space:nowrap;
+}
+
+.attachmentDepartment{
+  background:rgba(59, 130, 246, 0.1);
+  color:#2563eb;
+  border-color:rgba(59, 130, 246, 0.2);
 }
 
 .attachmentType{
@@ -2301,6 +2307,10 @@ body.previewOpen {
 
   .messageBubble{
     max-width:85%;
+  }
+
+  .messageFileCard{
+    max-width:100%;
   }
 }
 /* ===================== SETTINGS ===================== */
@@ -3650,6 +3660,27 @@ tr:hover {
 .selectedDocument {
     background: var(--surface-secondary);
     color: var(--text-secondary);
+}
+
+.attachmentCard {
+    background: var(--surface-secondary);
+}
+
+.attachmentName,
+.messageFileCardName {
+    color: var(--text-primary);
+}
+
+body.dark-mode .attachmentName,
+body.dark-mode .messageFileCardName,
+:root.dark .attachmentName,
+:root.dark .messageFileCardName {
+    color: var(--text-primary);
+}
+
+.messageFileCard {
+    background: var(--surface);
+    border-color: var(--border);
 }
 
 .questionInputWrapper {
@@ -6694,6 +6725,72 @@ body {
     flex-direction: column;
     gap: 10px;
     max-width: 78%;
+}
+
+.messageRow.user .messageColumn {
+    align-items: flex-end;
+}
+
+.messageFileCards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    max-width: 100%;
+}
+
+.messageRow.user .messageFileCards {
+    justify-content: flex-end;
+}
+
+.messageFileCard {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 240px;
+    min-width: 0;
+    padding: 8px 12px 8px 8px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--text-secondary);
+}
+
+.messageFileCardIcon {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    background: var(--primary-light);
+    color: var(--primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.messageFileCardIcon svg {
+    font-size: 18px;
+}
+
+.messageFileCardBody {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.messageFileCardName {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.messageFileCardType {
+    font-size: 11px;
+    color: var(--text-secondary);
+    letter-spacing: .02em;
 }
 
 .sourceCards {

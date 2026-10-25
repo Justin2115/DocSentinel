@@ -27,9 +27,17 @@ const sampleQuestions = [
 	"What happens if payment is late?",
 ];
 
+// Filename and type only: the card identifies what was in scope, never OCR text.
+type MessageAttachment = {
+	id: number;
+	name: string;
+	typeLabel: string;
+};
+
 type Message = {
 	type: "user" | "ai";
 	text: string;
+	attachments?: MessageAttachment[];
 	sources?: SourceCitation[];
 	hasEvidence?: boolean;
 	notes?: string;
@@ -143,11 +151,29 @@ type Conversation = {
 const getChatStorageKey = (userId?: number | null) =>
 	userId ? `docsentinel.chat.v1.user_${userId}` : "docsentinel.chat.v1.anon";
 
+const isAttachment = (value: unknown): value is MessageAttachment => {
+	const attachment = value as Partial<MessageAttachment>;
+	return (
+		typeof attachment?.id === "number" &&
+		typeof attachment?.name === "string" &&
+		typeof attachment?.typeLabel === "string"
+	);
+};
+
 const isMessage = (value: unknown): value is Message => {
 	const message = value as Partial<Message>;
+	if (
+		!(message?.type === "user" || message?.type === "ai") ||
+		typeof message?.text !== "string"
+	) {
+		return false;
+	}
+	if (message.attachments == null) {
+		return true;
+	}
 	return (
-		(message?.type === "user" || message?.type === "ai") &&
-		typeof message?.text === "string"
+		Array.isArray(message.attachments) &&
+		message.attachments.every(isAttachment)
 	);
 };
 
@@ -209,6 +235,56 @@ const fileTypeLabel = (document: DocumentRecord) => {
 	if (mime.includes("text") || extension === "txt") return "Text";
 	return extension ? extension.toUpperCase() : "File";
 };
+
+const DocumentFileCard = ({
+	name,
+	typeLabel,
+	status,
+	department,
+	onRemove,
+	removeLabel,
+	title,
+}: {
+	name: string;
+	typeLabel: string;
+	status?: string;
+	department?: string | null;
+	onRemove?: () => void;
+	removeLabel?: string;
+	title?: string;
+}) => (
+	<div
+		className={onRemove ? "attachmentCard" : "messageFileCard"}
+		title={title ?? name}
+	>
+		<span className={onRemove ? undefined : "messageFileCardIcon"} aria-hidden="true">
+			<DescriptionOutlinedIcon />
+		</span>
+		{onRemove ? (
+			<>
+				<span className="attachmentName">{name}</span>
+				<span className="attachmentType">{typeLabel}</span>
+				{department && (
+					<span className="attachmentType attachmentDepartment">{department}</span>
+				)}
+				{status && <span className="attachmentStatus">{status}</span>}
+				<button
+					type="button"
+					className="attachmentRemove"
+					aria-label={removeLabel ?? `Detach ${name} from this conversation`}
+					onClick={onRemove}
+				>
+					<CloseOutlinedIcon />
+				</button>
+			</>
+		) : (
+			<span className="messageFileCardBody">
+				<span className="messageFileCardName">{name}</span>
+				<span className="messageFileCardType">{typeLabel}</span>
+			</span>
+		)}
+	</div>
+);
 
 const AskQuestion = () => {
 	const { user: currentUser } = useAuth();
@@ -370,7 +446,35 @@ const AskQuestion = () => {
 
 		setIsSearching(true);
 		const previous = messages;
-		setMessages((current) => [...current, { type: "user", text: query }]);
+		const namedById = new Map<number, MessageAttachment>();
+		for (const message of messages) {
+			for (const attachment of message.attachments ?? []) {
+				namedById.set(attachment.id, attachment);
+			}
+		}
+		for (const document of documents) {
+			namedById.set(document.id, {
+				id: document.id,
+				name: document.original_filename,
+				typeLabel: fileTypeLabel(document),
+			});
+		}
+		const attachments = scopeIds.map(
+			(id) =>
+				namedById.get(id) ?? {
+					id,
+					name: `Document ${id}`,
+					typeLabel: "File",
+				}
+		);
+		setMessages((current) => [
+			...current,
+			{
+				type: "user",
+				text: query,
+				attachments: attachments.length > 0 ? attachments : undefined,
+			},
+		]);
 		setQuestion("");
 
 		// A long local generation can outlast the user's patience; leaving this
@@ -528,6 +632,22 @@ const AskQuestion = () => {
 										</div>
 									)}
 									<div className="messageColumn">
+										{message.type === "user" &&
+											message.attachments &&
+											message.attachments.length > 0 && (
+												<div
+													className="messageFileCards"
+													aria-label="Documents attached to this question"
+												>
+													{message.attachments.map((attachment) => (
+														<DocumentFileCard
+															key={attachment.id}
+															name={attachment.name}
+															typeLabel={attachment.typeLabel}
+														/>
+													))}
+												</div>
+											)}
 										<div className="messageBubble" style={{ whiteSpace: "pre-wrap" }}>
 											{message.text}
 										</div>
@@ -759,32 +879,16 @@ const AskQuestion = () => {
 					) : (
 						<div className="attachmentStrip">
 							{selectedDocuments.map((document) => (
-								<div
-									className="attachmentCard"
+								<DocumentFileCard
 									key={document.id}
+									name={document.original_filename}
+									typeLabel={fileTypeLabel(document)}
+									status={statusLabel(document.status)}
+									department={document.department}
 									title={`${document.original_filename} - OCR text, extracted fields and indexed embeddings contribute to RAG`}
-								>
-									<DescriptionOutlinedIcon />
-									<span className="attachmentName">{document.original_filename}</span>
-									<span className="attachmentType">{fileTypeLabel(document)}</span>
-									{document.department && (
-										<span
-											className="attachmentType"
-											style={{ background: "rgba(59, 130, 246, 0.1)", color: "#2563eb", borderColor: "rgba(59, 130, 246, 0.2)" }}
-										>
-											{document.department}
-										</span>
-									)}
-									<span className="attachmentStatus">{statusLabel(document.status)}</span>
-									<button
-										type="button"
-										className="attachmentRemove"
-										aria-label={`Detach ${document.original_filename} from this conversation`}
-										onClick={() => toggleDocument(document.id)}
-									>
-										<CloseOutlinedIcon />
-									</button>
-								</div>
+									removeLabel={`Detach ${document.original_filename} from this conversation`}
+									onRemove={() => toggleDocument(document.id)}
+								/>
 							))}
 							{scopeIds.length > selectedDocuments.length && (
 								<span
