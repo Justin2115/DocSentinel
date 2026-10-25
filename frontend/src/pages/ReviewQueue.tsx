@@ -35,6 +35,7 @@ import {
 } from "@mui/material";
 
 import {
+  getDocument,
   getReviewQueueDocuments,
   approveDocument,
   rejectDocument,
@@ -43,6 +44,12 @@ import {
   updateDocumentOCRText,
 } from "../api/document";
 import type { DocumentDetail, OCRResult } from "../api/document";
+import {
+  applySavedOcrToDocuments,
+  canonicalExtractedText,
+  ocrSaveFeedback,
+  originalOcrText,
+} from "../utils/ocrCorrection";
 import { useAuth } from "../context/AuthContext";
 import {
   formatConfidence,
@@ -116,7 +123,7 @@ export default function ReviewQueue() {
 
       const initialOcr: Record<number, string> = {};
       activeDoc.ocr_results?.forEach((ocr) => {
-        initialOcr[ocr.id] = ocr.extracted_text ?? "";
+        initialOcr[ocr.id] = canonicalExtractedText(ocr);
       });
       setOcrTextValues(initialOcr);
       setEditingOcrId(null);
@@ -181,30 +188,52 @@ export default function ReviewQueue() {
     if (newText === undefined) return;
     try {
       setSavingOcrId(ocrId);
-      await updateDocumentOCRText(activeDoc.id, ocrId, newText);
-      setSuccessMsg("OCR text updated and original preserved.");
-      setDocuments((prev) =>
-        prev.map((d) =>
-          d.id === activeDoc.id
-            ? {
-                ...d,
-                ocr_results: d.ocr_results?.map((ocr) =>
-                  ocr.id === ocrId
-                    ? {
-                        ...ocr,
-                        extracted_text: newText,
-                        raw_text: ocr.raw_text || ocr.extracted_text,
-                      }
-                    : ocr
-                ),
-              }
-            : d
-        )
+      setError(null);
+      const patchResponse = await updateDocumentOCRText(
+        activeDoc.id,
+        ocrId,
+        newText
       );
+      let saved: OCRResult = patchResponse.data;
+      setDocuments((prev) =>
+        applySavedOcrToDocuments(prev, activeDoc.id, saved)
+      );
+      setOcrTextValues((prev) => ({
+        ...prev,
+        [ocrId]: canonicalExtractedText(saved),
+      }));
+      const feedback = ocrSaveFeedback({ ok: true, ocr: saved });
+      setSuccessMsg(feedback.successMessage);
       setEditingOcrId(null);
+      try {
+        const fresh = await getDocument(activeDoc.id);
+        const fromFetch = fresh.data.ocr_results?.find(
+          (ocr) => Number(ocr.id) === Number(ocrId)
+        );
+        if (fromFetch) {
+          saved = fromFetch;
+          setDocuments((prev) =>
+            prev.map((d) =>
+              d.id === fresh.data.id ? { ...d, ...fresh.data } : d
+            )
+          );
+          setOcrTextValues((prev) => ({
+            ...prev,
+            [ocrId]: canonicalExtractedText(fromFetch),
+          }));
+        }
+      } catch {
+        // PATCH already persisted; local merge is enough if refetch fails.
+      }
     } catch (err: any) {
       console.error("Failed to update OCR text:", err);
-      setError(err.response?.data?.detail || "Failed to update OCR text.");
+      const feedback = ocrSaveFeedback({
+        ok: false,
+        detail:
+          err.response?.data?.detail || "Failed to update OCR text.",
+      });
+      setSuccessMsg(null);
+      setError(feedback.errorMessage);
     } finally {
       setSavingOcrId(null);
     }
@@ -867,7 +896,7 @@ export default function ReviewQueue() {
                           <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--primary)", marginBottom: 4 }}>
                             --- PAGE {ocrPageNumber(res) || i + 1} ---
                           </div>
-                          <div>{res.raw_text || res.extracted_text || "(Empty page)"}</div>
+                          <div>{canonicalExtractedText(res) || "(Empty page)"}</div>
                         </div>
                       ))
                     ) : (
@@ -937,8 +966,8 @@ export default function ReviewQueue() {
                   {activeDoc.ocr_results && activeDoc.ocr_results.length > 0 ? (
                     activeDoc.ocr_results.map((res) => {
                       const pageNum = ocrPageNumber(res);
-                      const isEditing = editingOcrId === res.id;
-                      const isSaving = savingOcrId === res.id;
+                      const isEditing = Number(editingOcrId) === Number(res.id);
+                      const isSaving = Number(savingOcrId) === Number(res.id);
                       const pageTables = (activeDoc.extracted_tables || []).filter(
                         (t) => pageNum != null && t.page_number === pageNum
                       );
@@ -1040,13 +1069,15 @@ export default function ReviewQueue() {
                                 overflowY: "auto",
                               }}
                             >
-                              {res.extracted_text || "(No text recorded on this page)"}
+                              {canonicalExtractedText(res) ||
+                                "(No text recorded on this page)"}
                             </div>
                           )}
 
-                          {res.raw_text && res.raw_text !== res.extracted_text && (
+                          {originalOcrText(res) &&
+                            originalOcrText(res) !== canonicalExtractedText(res) && (
                             <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginTop: "6px", fontStyle: "italic" }}>
-                              Original OCR: {res.raw_text.slice(0, 100)}...
+                              Original OCR: {originalOcrText(res).slice(0, 100)}...
                             </div>
                           )}
                         </div>

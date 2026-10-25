@@ -45,6 +45,8 @@ from app.schemas.document import (
     DocumentListResponse,
     DocumentProcessingResponse,
     DocumentResponse,
+    OCRResultResponse,
+    OCRTextUpdateRequest,
     ReviewActionRequest,
     UploadQueueItem,
     UploadQueueResponse,
@@ -1828,12 +1830,13 @@ def update_extracted_field(
 
 @router.patch(
     "/{document_id}/ocr/{ocr_id}",
+    response_model=OCRResultResponse,
     summary="Correct extracted OCR text (Checker / Admin)",
 )
 def update_ocr_text(
     document_id: int,
     ocr_id: int,
-    payload: dict,
+    payload: OCRTextUpdateRequest,
     current_user: User = Depends(require_upload_checker),
     db: Session = Depends(get_db),
 ):
@@ -1850,18 +1853,18 @@ def update_ocr_text(
     if not ocr:
         raise HTTPException(status_code=404, detail="OCR record not found")
 
-    new_text = payload.get("extracted_text")
-    if new_text is None:
-        new_text = payload.get("text")
+    new_text = payload.resolved_text()
     if new_text is None:
         raise HTTPException(status_code=400, detail="Missing new OCR text")
 
-    # Preserve original raw OCR text before any corrections
-    if not ocr.raw_text and ocr.extracted_text:
+    # Preserve the original engine output. Later corrections only change
+    # extracted_text, which search, RAG, and the review editor all read.
+    if not (ocr.raw_text or "").strip():
         ocr.raw_text = ocr.extracted_text
 
     old_preview = (ocr.extracted_text or "")[:120]
     ocr.extracted_text = str(new_text)
+    document.updated_at = func.now()
     db.commit()
     db.refresh(ocr)
 
@@ -1880,13 +1883,11 @@ def update_ocr_text(
             "new_preview": str(new_text)[:120],
         },
     )
-    return {
-        "id": ocr.id,
-        "document_id": ocr.document_id,
-        "page_id": ocr.page_id,
-        "extracted_text": ocr.extracted_text,
-        "raw_text": ocr.raw_text,
-    }
+    # Rebuild this document's vectors from the corrected extracted_text.
+    # schedule_document_indexing deletes existing chunks first, so it will
+    # not append duplicates or rebuild the whole collection.
+    schedule_document_indexing(document.id)
+    return ocr
 
 
 

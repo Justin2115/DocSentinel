@@ -351,7 +351,7 @@ export const updateDocumentOCRText = (
 	ocrId: number,
 	extractedText: string
 ) =>
-	apiClient.patch(
+	apiClient.patch<OCRResult>(
 		`/documents/${documentId}/ocr/${ocrId}`,
 		{ extracted_text: extractedText }
 	);

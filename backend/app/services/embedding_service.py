@@ -199,13 +199,20 @@ def _apply_indexed_status(document: Document) -> None:
 
 _indexing_lock = threading.Lock()
 _indexing_in_flight: set[int] = set()
+_indexing_pending: set[int] = set()
 
 # Statuses whose page set is not final yet, so they must not be embedded.
 _BACKFILL_EXCLUDED_STATUSES = ("failed", "processing")
 
 
 def schedule_document_indexing(document_id: int) -> None:
-    """Index embeddings after OCR without blocking the upload HTTP response."""
+    """Index embeddings after OCR without blocking the upload HTTP response.
+
+    If a job is already running for this document, queue a follow-up pass so
+    later OCR corrections are not dropped. index_document_embeddings deletes
+    existing chunks first, so follow-up passes replace vectors instead of
+    duplicating them.
+    """
     import threading
 
     from app.db.session import SessionLocal
@@ -236,16 +243,29 @@ def schedule_document_indexing(document_id: int) -> None:
 
     with _indexing_lock:
         if document_id in _indexing_in_flight:
-            logger.info("Indexing already in flight for document %s", document_id)
+            _indexing_pending.add(document_id)
+            logger.info(
+                "Indexing already in flight for document %s; queued follow-up",
+                document_id,
+            )
             return
         _indexing_in_flight.add(document_id)
 
     def _guarded_run() -> None:
         try:
-            _run()
-        finally:
+            while True:
+                _run()
+                with _indexing_lock:
+                    if document_id in _indexing_pending:
+                        _indexing_pending.discard(document_id)
+                        continue
+                    _indexing_in_flight.discard(document_id)
+                    return
+        except Exception:
             with _indexing_lock:
                 _indexing_in_flight.discard(document_id)
+                _indexing_pending.discard(document_id)
+            raise
 
     threading.Thread(
         target=_guarded_run,

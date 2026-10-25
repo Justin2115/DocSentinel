@@ -702,8 +702,13 @@ class TestIndexingIdempotency:
             db.close()
 
     def test_indexing_is_single_flight_per_document(self, monkeypatch):
-        """Two schedulings of the same document must not run two index jobs."""
+        """Two schedulings of the same document must not run concurrently.
+
+        A second schedule while a job is in flight is queued as a follow-up
+        so OCR corrections are not dropped after the first pass finishes.
+        """
         import threading
+        import time
 
         started = threading.Event()
         release = threading.Event()
@@ -711,8 +716,9 @@ class TestIndexingIdempotency:
 
         def blocking_index(db, document_id):
             runs.append(document_id)
-            started.set()
-            assert release.wait(timeout=5), "test deadlock"
+            if len(runs) == 1:
+                started.set()
+                assert release.wait(timeout=5), "test deadlock"
             return 1
 
         monkeypatch.setattr(
@@ -721,13 +727,15 @@ class TestIndexingIdempotency:
 
         schedule_document_indexing(777)
         assert started.wait(timeout=5)
-        schedule_document_indexing(777)  # must be ignored, not queued twice
+        schedule_document_indexing(777)
+        time.sleep(0.3)
+        assert runs == [777], "follow-up must wait for the in-flight job"
         release.set()
 
-        import time
-
-        time.sleep(0.5)  # give a wrongly-queued second job a chance to start
-        assert runs == [777]
+        deadline = time.time() + 5
+        while len(runs) < 2 and time.time() < deadline:
+            time.sleep(0.05)
+        assert runs == [777, 777]
 
     def test_failed_documents_are_not_backfilled(self, tmp_path, monkeypatch):
         db = db_session.SessionLocal()

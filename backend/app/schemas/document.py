@@ -21,6 +21,7 @@ class OCRResultResponse(BaseModel):
     document_id: int
     page_id: int | None = None
     extracted_text: str | None = None
+    raw_text: str | None = None
     confidence: float | None = None
     ocr_engine: str | None = None
     processed_at: datetime | None = None
@@ -28,6 +29,20 @@ class OCRResultResponse(BaseModel):
     model_config = ConfigDict(
         from_attributes=True
     )
+
+
+class OCRTextUpdateRequest(BaseModel):
+    """Checker correction for page OCR. Empty string is a valid correction."""
+
+    extracted_text: str | None = None
+    text: str | None = None
+
+    def resolved_text(self) -> str | None:
+        if self.extracted_text is not None:
+            return self.extracted_text
+        if self.text is not None:
+            return self.text
+        return None
 
 
 class ExtractedFieldResponse(BaseModel):
