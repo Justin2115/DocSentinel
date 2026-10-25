@@ -10,7 +10,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import require_admin, require_super_admin
-from app.core.rbac import Department, UserRole
+from app.core.rbac import (
+    Department,
+    UserRole,
+    WORKFLOW_CONDITION_CONFIDENCE_BELOW,
+    WORKFLOW_RULE_TYPES,
+    can_manage_workflow_document_type,
+    canonical_document_type,
+    department_for_document_type,
+    managed_workflow_departments,
+    normalize_known_department,
+    resolve_workflow_scope_department,
+)
 from app.core.security import hash_password
 from app.db.session import get_db
 from app.models.audit import ActivityLog
@@ -24,6 +35,7 @@ from app.schemas.admin import (
     FolderPermissionsUpdateRequest,
     WorkflowConfigRequest,
     WorkflowConfigResponse,
+    WorkflowOptionsResponse,
     WorkflowRuleItem,
 )
 from app.schemas.auth import MessageResponse, UserResponse
@@ -33,6 +45,9 @@ from app.services.admin_service import (
     delete_workflow_rule,
     get_folder_permissions_matrix,
     get_workflow_configuration,
+    get_workflow_options,
+    is_eligible_route,
+    rule_belongs_to_department,
     update_folder_permissions_matrix,
     update_workflow_configuration,
 )
@@ -667,17 +682,136 @@ async def update_permissions(
 # WORKFLOW RULES
 # ============================================================
 
+def _workflow_scope_department(current_user: User, requested_department: Optional[str]) -> Optional[str]:
+    try:
+        return resolve_workflow_scope_department(current_user, requested_department)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PermissionError as exc:
+        log_activity(
+            action="UNAUTHORIZED_ACCESS",
+            status="FAILURE",
+            actor_id=current_user.id,
+            username=current_user.email,
+            department=current_user.department,
+            role=current_user.role,
+            target_resource="workflow_config",
+            failure_reason=str(exc),
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+def _validate_workflow_rule_payload(
+    db: Session,
+    current_user: User,
+    *,
+    document_type: Optional[str],
+    claimed_department: Optional[str],
+    route: str,
+    rule_type: str,
+    condition: Optional[str],
+    existing_rule: Any = None,
+) -> str:
+    if rule_type not in WORKFLOW_RULE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid rule type",
+        )
+    if condition and condition != WORKFLOW_CONDITION_CONFIDENCE_BELOW:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported workflow condition",
+        )
+
+    canonical_type = canonical_document_type(document_type)
+    if not canonical_type:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid document type is required",
+        )
+
+    rule_department = department_for_document_type(canonical_type)
+    claimed = None
+    if claimed_department and str(claimed_department).strip():
+        claimed = normalize_known_department(claimed_department)
+        if claimed is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unknown department",
+            )
+    if claimed and claimed != rule_department:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document type does not belong to the selected department",
+        )
+
+    if not can_manage_workflow_document_type(current_user, canonical_type):
+        log_activity(
+            action="UNAUTHORIZED_ACCESS",
+            status="FAILURE",
+            actor_id=current_user.id,
+            username=current_user.email,
+            department=current_user.department,
+            role=current_user.role,
+            target_resource="workflow_config",
+            failure_reason="Attempted to manage a workflow rule outside permitted department",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Department Admins can only manage workflow rules for their assigned department",
+        )
+
+    if existing_rule is not None and not current_user.is_super_admin:
+        if not rule_belongs_to_department(existing_rule, current_user.department):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify workflow rules belonging to other departments",
+            )
+
+    if not is_eligible_route(db, rule_department, route):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Route must be an eligible team or user for the selected department",
+        )
+
+    return canonical_type
+
+
 @router.get(
     "/workflow",
     response_model=WorkflowConfigResponse,
     summary="Admin only: Get workflow confidence threshold and routing rules",
 )
 async def get_workflow(
+    department: Optional[str] = Query(None),
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Retrieve the auto-flag threshold and active routing rules."""
-    return get_workflow_configuration(db)
+    """Retrieve the auto-flag threshold and active routing rules for the caller's permitted scope."""
+    scope = _workflow_scope_department(current_user, department)
+    config = get_workflow_configuration(db, department=scope)
+    config["can_edit_threshold"] = bool(current_user.is_super_admin)
+    return config
+
+
+@router.get(
+    "/workflow/options",
+    response_model=WorkflowOptionsResponse,
+    summary="Admin only: Dropdown catalogs for workflow routing",
+)
+async def workflow_options(
+    department: Optional[str] = Query(None),
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    scope = _workflow_scope_department(current_user, department)
+    departments = managed_workflow_departments(current_user)
+    return get_workflow_options(
+        db,
+        departments=departments,
+        selected_department=scope,
+        can_edit_threshold=bool(current_user.is_super_admin),
+    )
 
 
 @router.put(
@@ -691,10 +825,53 @@ async def update_workflow(
     db: Session = Depends(get_db),
 ):
     """Update confidence threshold and sync workflow routing rules."""
-    rules_dict = (
-        [r.model_dump() for r in payload.rules] if payload.rules is not None else None
+    from app.models.workflow import WorkflowRule
+
+    can_edit_threshold = bool(current_user.is_super_admin)
+    if not can_edit_threshold:
+        current = get_workflow_configuration(db)
+        if abs(float(payload.threshold) - float(current["threshold"])) > 0.001:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only Super Admin can change the global auto-flag threshold",
+            )
+
+    rules_dict = None
+    if payload.rules is not None:
+        rules_dict = []
+        for item in payload.rules:
+            existing = None
+            if item.id is not None:
+                existing = db.query(WorkflowRule).filter(WorkflowRule.id == item.id).first()
+                if existing is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Workflow rule with id {item.id} not found.",
+                    )
+            canonical_type = _validate_workflow_rule_payload(
+                db,
+                current_user,
+                document_type=item.document_type,
+                claimed_department=item.department,
+                route=item.route,
+                rule_type=item.type,
+                condition=item.condition,
+                existing_rule=existing,
+            )
+            dumped = item.model_dump()
+            dumped["document_type"] = canonical_type
+            dumped["department"] = department_for_document_type(canonical_type)
+            rules_dict.append(dumped)
+
+    scope = None if current_user.is_super_admin else _workflow_scope_department(current_user, None)
+    updated = update_workflow_configuration(
+        db,
+        payload.threshold,
+        rules_dict,
+        update_threshold=can_edit_threshold,
+        department=scope,
     )
-    updated = update_workflow_configuration(db, payload.threshold, rules_dict)
+    updated["can_edit_threshold"] = can_edit_threshold
     log_activity(
         action="WORKFLOW_UPDATE",
         status="SUCCESS",
@@ -720,27 +897,22 @@ async def create_workflow_rule(
     db: Session = Depends(get_db),
 ):
     """Add a new document routing automation rule."""
-    if not current_user.is_super_admin:
-        from app.core.rbac import DEPARTMENT_DOCUMENT_TYPES, Department
-        dept_norm = Department.normalize(current_user.department)
-        dept_enum = next((d for d in Department if d.value == dept_norm), None)
-        allowed_types = {t.lower() for t in DEPARTMENT_DOCUMENT_TYPES.get(dept_enum, [])} if dept_enum else set()
-        allowed_types.add((current_user.department or "").strip().lower())
-        if payload.document_type and payload.document_type.strip().lower() not in allowed_types:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Department Admins can only create workflow rules for their department ({current_user.department})",
-            )
-        if not payload.document_type:
-            payload.document_type = current_user.department
-
+    canonical_type = _validate_workflow_rule_payload(
+        db,
+        current_user,
+        document_type=payload.document_type,
+        claimed_department=payload.department,
+        route=payload.route,
+        rule_type=payload.type,
+        condition=payload.condition,
+    )
     created = add_workflow_rule(
         db,
         title=payload.title,
         route=payload.route,
         rule_type=payload.type,
         threshold=payload.threshold,
-        document_type=payload.document_type,
+        document_type=canonical_type,
     )
     log_activity(
         action="WORKFLOW_RULE_ADD",
@@ -750,7 +922,7 @@ async def create_workflow_rule(
         department=current_user.department,
         role=current_user.role,
         target_resource=f"workflow_rule:{created['id']}",
-        details={"title": payload.title, "route": payload.route},
+        details={"title": payload.title, "route": payload.route, "document_type": canonical_type},
     )
     return created
 
@@ -774,15 +946,20 @@ async def remove_workflow_rule(
             detail=f"Workflow rule with id {rule_id} not found.",
         )
     if not current_user.is_super_admin:
-        from app.core.rbac import DEPARTMENT_DOCUMENT_TYPES, Department
-        dept_norm = Department.normalize(current_user.department)
-        dept_enum = next((d for d in Department if d.value == dept_norm), None)
-        allowed_types = {t.lower() for t in DEPARTMENT_DOCUMENT_TYPES.get(dept_enum, [])} if dept_enum else set()
-        allowed_types.add((current_user.department or "").strip().lower())
-        if rule.document_type and rule.document_type.strip().lower() not in allowed_types:
+        if not rule_belongs_to_department(rule, current_user.department):
+            log_activity(
+                action="UNAUTHORIZED_ACCESS",
+                status="FAILURE",
+                actor_id=current_user.id,
+                username=current_user.email,
+                department=current_user.department,
+                role=current_user.role,
+                target_resource=f"workflow_rule:{rule_id}",
+                failure_reason="Attempted to delete a workflow rule outside permitted department",
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Cannot delete workflow rules belonging to other departments",
+                detail="Cannot delete workflow rules belonging to other departments",
             )
     success = delete_workflow_rule(db, rule_id)
     if not success:

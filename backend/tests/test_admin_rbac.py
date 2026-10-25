@@ -299,10 +299,10 @@ class AdminRBACTestCase(unittest.TestCase):
             "/api/admin/workflow/rules",
             json={
                 "title": "Custom Test Rule",
-                "route": "Test Unit",
+                "route": "Finance team",
                 "type": "warning",
                 "threshold": 78.0,
-                "document_type": "Contracts",
+                "document_type": "Invoices",
             },
             headers=self.admin_headers,
         )

@@ -22,7 +22,9 @@ class WorkflowRuleItem(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     route: str = Field(min_length=1, max_length=150)
     document_type: Optional[str] = None
+    department: Optional[str] = None
     threshold: float = Field(ge=50.0, le=100.0, default=80.0)
+    condition: str = Field(default="confidence_below_threshold")
 
     @field_validator("title", "route")
     @classmethod
@@ -41,6 +43,25 @@ class WorkflowConfigRequest(BaseModel):
 class WorkflowConfigResponse(BaseModel):
     threshold: float
     rules: List[WorkflowRuleItem]
+    can_edit_threshold: bool = True
+
+
+class WorkflowOptionItem(BaseModel):
+    value: str
+    label: str
+    department: Optional[str] = None
+    kind: Optional[str] = None
+
+
+class WorkflowOptionsResponse(BaseModel):
+    departments: List[WorkflowOptionItem]
+    document_types: List[WorkflowOptionItem]
+    routes: List[WorkflowOptionItem]
+    rule_types: List[WorkflowOptionItem]
+    conditions: List[WorkflowOptionItem]
+    priority_supported: bool = False
+    can_edit_threshold: bool = True
+    selected_department: Optional[str] = None
 
 
 class AddWorkflowRuleRequest(BaseModel):
@@ -49,6 +70,8 @@ class AddWorkflowRuleRequest(BaseModel):
     type: str = Field(default="warning", pattern="^(warning|security|claims)$")
     threshold: float = Field(ge=50.0, le=100.0, default=80.0)
     document_type: Optional[str] = None
+    department: Optional[str] = None
+    condition: Optional[str] = None
 
     @field_validator("title", "route")
     @classmethod

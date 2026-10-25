@@ -5,7 +5,17 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.rbac import UserRole
+from app.core.rbac import (
+    UserRole,
+    WORKFLOW_CONDITIONS,
+    WORKFLOW_CONDITION_CONFIDENCE_BELOW,
+    WORKFLOW_RULE_TYPES,
+    canonical_document_type,
+    department_for_document_type,
+    document_types_for_department,
+    managed_workflow_departments,
+    normalize_known_department,
+)
 from app.models.permission import FolderPermission
 from app.models.user import User
 from app.models.workflow import WorkflowRule, WorkflowSetting
@@ -287,9 +297,34 @@ def check_folder_permission(
     return perm.can_view
 
 
+def _serialize_workflow_rule(rule: WorkflowRule) -> dict[str, Any]:
+    document_type = rule.document_type
+    return {
+        "id": rule.id,
+        "type": rule.rule_type,
+        "title": rule.title,
+        "route": rule.route,
+        "document_type": document_type,
+        "department": department_for_document_type(document_type),
+        "threshold": rule.threshold,
+        "condition": WORKFLOW_CONDITION_CONFIDENCE_BELOW,
+    }
+
+
+def rule_belongs_to_department(rule: WorkflowRule, department: str | None) -> bool:
+    dept = normalize_known_department(department)
+    if not dept:
+        return False
+    rule_dept = department_for_document_type(rule.document_type)
+    if rule_dept == dept:
+        return True
+    # Legacy rules stored the department name in document_type.
+    stored = (rule.document_type or "").strip().upper()
+    return stored == dept
+
+
 def get_workflow_configuration(db: Session, department: str | None = None) -> dict[str, Any]:
     """Get active threshold and routing rules, optionally scoped to a department."""
-    from app.core.rbac import DEPARTMENT_DOCUMENT_TYPES, Department
     setting = db.query(WorkflowSetting).first()
     threshold = setting.confidence_threshold if setting else 80.0
 
@@ -301,48 +336,38 @@ def get_workflow_configuration(db: Session, department: str | None = None) -> di
 
     all_rules = rules_query.all()
     if department:
-        dept_norm = Department.normalize(department)
-        dept_enum = next((d for d in Department if d.value == dept_norm), None)
-        allowed_types = {t.lower() for t in DEPARTMENT_DOCUMENT_TYPES.get(dept_enum, [])} if dept_enum else set()
-        allowed_types.add(str(department).strip().lower())
-        rules = [
-            r for r in all_rules
-            if not r.document_type or r.document_type.strip().lower() in allowed_types
-        ]
+        rules = [rule for rule in all_rules if rule_belongs_to_department(rule, department)]
     else:
         rules = all_rules
 
     return {
         "threshold": threshold,
-        "rules": [
-            {
-                "id": r.id,
-                "type": r.rule_type,
-                "title": r.title,
-                "route": r.route,
-                "document_type": r.document_type,
-                "threshold": r.threshold,
-            }
-            for r in rules
-        ],
+        "rules": [_serialize_workflow_rule(rule) for rule in rules],
+        "can_edit_threshold": True,
     }
 
 
 def update_workflow_configuration(
-    db: Session, threshold: float, rules: list[dict[str, Any]] | None = None
+    db: Session,
+    threshold: float,
+    rules: list[dict[str, Any]] | None = None,
+    *,
+    update_threshold: bool = True,
+    department: str | None = None,
 ) -> dict[str, Any]:
     """Update confidence threshold and optionally update/replace routing rules."""
-    setting = db.query(WorkflowSetting).first()
-    if not setting:
-        setting = WorkflowSetting(confidence_threshold=threshold)
-        db.add(setting)
-    else:
-        setting.confidence_threshold = threshold
+    if update_threshold:
+        setting = db.query(WorkflowSetting).first()
+        if not setting:
+            setting = WorkflowSetting(confidence_threshold=threshold)
+            db.add(setting)
+        else:
+            setting.confidence_threshold = threshold
 
     if rules is not None:
-        # Keep existing rules or sync
         for rule_item in rules:
             rule_id = rule_item.get("id")
+            document_type = canonical_document_type(rule_item.get("document_type")) or rule_item.get("document_type")
             if rule_id:
                 r = (
                     db.query(WorkflowRule)
@@ -353,46 +378,146 @@ def update_workflow_configuration(
                     r.title = rule_item.get("title", r.title)
                     r.route = rule_item.get("route", r.route)
                     r.rule_type = rule_item.get("type", r.rule_type)
-                    r.document_type = rule_item.get("document_type", r.document_type)
+                    r.document_type = document_type
                     r.threshold = rule_item.get("threshold", r.threshold)
             else:
-                # New rule
                 new_rule = WorkflowRule(
                     rule_type=rule_item.get("type", "warning"),
                     title=rule_item.get("title", "New Rule"),
                     route=rule_item.get("route", "Review team"),
-                    document_type=rule_item.get("document_type"),
+                    document_type=document_type,
                     threshold=float(rule_item.get("threshold", threshold)),
                     is_active=True,
                 )
                 db.add(new_rule)
 
     db.commit()
-    return get_workflow_configuration(db)
+    return get_workflow_configuration(db, department=department)
 
 
 def add_workflow_rule(
     db: Session, title: str, route: str, rule_type: str = "warning", threshold: float = 80.0, document_type: str | None = None
 ) -> dict[str, Any]:
     """Create a new routing rule."""
+    canonical_type = canonical_document_type(document_type) or (document_type.strip() if document_type else None)
     rule = WorkflowRule(
         title=title.strip(),
         route=route.strip(),
         rule_type=rule_type.strip(),
         threshold=threshold,
-        document_type=document_type.strip() if document_type else None,
+        document_type=canonical_type,
         is_active=True,
     )
     db.add(rule)
     db.commit()
     db.refresh(rule)
+    return _serialize_workflow_rule(rule)
+
+
+def _department_users(db: Session, department: str) -> list[User]:
+    dept = normalize_known_department(department)
+    if not dept:
+        return []
+    return (
+        db.query(User)
+        .filter(User.is_active == True, func.upper(User.department) == dept)
+        .order_by(User.name.asc(), User.id.asc())
+        .all()
+    )
+
+
+def eligible_route_values(db: Session, department: str | None) -> set[str]:
+    values: set[str] = set()
+    dept = normalize_known_department(department)
+    if not dept:
+        return values
+    for user in _department_users(db, dept):
+        if user.name and user.name.strip():
+            values.add(user.name.strip())
+        if user.email and user.email.strip():
+            values.add(user.email.strip())
+    for rule in db.query(WorkflowRule).filter(WorkflowRule.is_active == True).all():
+        if rule_belongs_to_department(rule, dept) and rule.route and rule.route.strip():
+            values.add(rule.route.strip())
+    return values
+
+
+def is_eligible_route(db: Session, department: str | None, route: str | None) -> bool:
+    if not route or not str(route).strip():
+        return False
+    return str(route).strip() in eligible_route_values(db, department)
+
+
+def get_workflow_options(
+    db: Session,
+    *,
+    departments: list[str],
+    selected_department: str | None,
+    can_edit_threshold: bool,
+) -> dict[str, Any]:
+    selected = normalize_known_department(selected_department)
+    document_types: list[dict[str, str]] = []
+    for dept in departments:
+        for doc_type in document_types_for_department(dept):
+            document_types.append({"department": dept, "value": doc_type, "label": doc_type})
+
+    route_departments = [selected] if selected else departments
+    routes: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for dept in route_departments:
+        for user in _department_users(db, dept):
+            value = user.name.strip() if user.name and user.name.strip() else user.email
+            key = (dept, value.lower())
+            if not value or key in seen:
+                continue
+            seen.add(key)
+            role_label = UserRole.to_display_label(user.role)
+            routes.append(
+                {
+                    "department": dept,
+                    "value": value,
+                    "label": f"{value} ({role_label})",
+                    "kind": "user",
+                }
+            )
+        for rule in db.query(WorkflowRule).filter(WorkflowRule.is_active == True).all():
+            if not rule_belongs_to_department(rule, dept) or not rule.route:
+                continue
+            value = rule.route.strip()
+            key = (dept, value.lower())
+            if not value or key in seen:
+                continue
+            seen.add(key)
+            routes.append(
+                {
+                    "department": dept,
+                    "value": value,
+                    "label": value,
+                    "kind": "existing_route",
+                }
+            )
+
     return {
-        "id": rule.id,
-        "type": rule.rule_type,
-        "title": rule.title,
-        "route": rule.route,
-        "document_type": rule.document_type,
-        "threshold": rule.threshold,
+        "departments": [
+            {
+                "value": dept,
+                "label": dept if dept in {"HR", "IT"} else dept.replace("_", " ").title(),
+            }
+            for dept in departments
+        ],
+        "document_types": document_types,
+        "routes": routes,
+        "rule_types": [{"value": item, "label": item.replace("_", " ").title()} for item in WORKFLOW_RULE_TYPES],
+        "conditions": [
+            {
+                "value": WORKFLOW_CONDITION_CONFIDENCE_BELOW,
+                "label": "Confidence below threshold",
+            }
+            for _ in WORKFLOW_CONDITIONS
+        ],
+        "priority_supported": False,
+        "can_edit_threshold": can_edit_threshold,
+        "selected_department": selected,
     }
 
 

@@ -483,7 +483,7 @@ class DepartmentRBACAndAuditTestCase(unittest.TestCase):
             "/api/admin/workflow/rules",
             json={
                 "title": "HR Appraisal Review",
-                "route": "HR Senior Team",
+                "route": "HR Admin",
                 "type": "warning",
                 "threshold": 85.0,
                 "document_type": "Appraisals",  # Belongs to HR
@@ -492,34 +492,168 @@ class DepartmentRBACAndAuditTestCase(unittest.TestCase):
         )
         self.assertEqual(resp_bad.status_code, 403)
 
+        # Client-supplied department is not trusted: Finance Admin cannot request HR catalogs.
+        resp_spoof_options = self.client.get(
+            "/api/admin/workflow/options",
+            params={"department": "HR"},
+            headers=self.fin_admin_headers,
+        )
+        self.assertEqual(resp_spoof_options.status_code, 403)
+
+        resp_spoof_get = self.client.get(
+            "/api/admin/workflow",
+            params={"department": "HR"},
+            headers=self.fin_admin_headers,
+        )
+        self.assertEqual(resp_spoof_get.status_code, 403)
+
         # Finance Admin adding a Finance workflow rule -> 201 Created
         resp_ok = self.client.post(
             "/api/admin/workflow/rules",
             json={
                 "title": "Finance High Value Invoice",
-                "route": "Finance Director",
+                "route": "Finance Admin",
                 "type": "warning",
                 "threshold": 90.0,
                 "document_type": "Invoices",  # Belongs to Finance
+                "department": "HR",  # spoofed; document type still governs access
+            },
+            headers=self.fin_admin_headers,
+        )
+        self.assertEqual(resp_ok.status_code, 400)
+
+        resp_ok = self.client.post(
+            "/api/admin/workflow/rules",
+            json={
+                "title": "Finance High Value Invoice",
+                "route": "Finance Admin",
+                "type": "warning",
+                "threshold": 90.0,
+                "document_type": "Invoices",
             },
             headers=self.fin_admin_headers,
         )
         self.assertEqual(resp_ok.status_code, 201)
         created_rule_id = resp_ok.json()["id"]
+        self.assertEqual(resp_ok.json()["department"], "FINANCE")
 
-        # HR Admin cannot delete the Finance rule -> 403 Forbidden
+        # Super Admin can view rules across departments.
+        resp_super = self.client.get("/api/admin/workflow", headers=self.super_admin_headers)
+        self.assertEqual(resp_super.status_code, 200)
+        super_ids = {rule["id"] for rule in resp_super.json()["rules"]}
+        self.assertIn(created_rule_id, super_ids)
+
+        # Finance Admin GET is limited to Finance document types.
+        resp_fin_get = self.client.get("/api/admin/workflow", headers=self.fin_admin_headers)
+        self.assertEqual(resp_fin_get.status_code, 200)
+        for rule in resp_fin_get.json()["rules"]:
+            self.assertEqual(rule.get("department"), "FINANCE")
+        self.assertFalse(resp_fin_get.json().get("can_edit_threshold"))
+
+        # Dropdown catalogs are department-scoped for Department Admin.
+        resp_fin_options = self.client.get("/api/admin/workflow/options", headers=self.fin_admin_headers)
+        self.assertEqual(resp_fin_options.status_code, 200)
+        fin_options = resp_fin_options.json()
+        self.assertEqual([item["value"] for item in fin_options["departments"]], ["FINANCE"])
+        self.assertTrue(all(item["department"] == "FINANCE" for item in fin_options["document_types"]))
+        self.assertIn("Invoices", [item["value"] for item in fin_options["document_types"]])
+        self.assertNotIn("Appraisals", [item["value"] for item in fin_options["document_types"]])
+        self.assertIn("Finance Admin", [item["value"] for item in fin_options["routes"]])
+        self.assertNotIn("HR Admin", [item["value"] for item in fin_options["routes"]])
+
+        resp_super_options = self.client.get("/api/admin/workflow/options", headers=self.super_admin_headers)
+        self.assertEqual(resp_super_options.status_code, 200)
+        super_depts = {item["value"] for item in resp_super_options.json()["departments"]}
+        self.assertIn("FINANCE", super_depts)
+        self.assertIn("HR", super_depts)
+
+        # Super Admin can create a rule in HR.
+        resp_super_create = self.client.post(
+            "/api/admin/workflow/rules",
+            json={
+                "title": "HR Policies review",
+                "route": "HR Admin",
+                "type": "warning",
+                "threshold": 88.0,
+                "document_type": "Policies",
+            },
+            headers=self.super_admin_headers,
+        )
+        self.assertEqual(resp_super_create.status_code, 201)
+        hr_rule_id = resp_super_create.json()["id"]
+
+        # Finance Admin cannot edit or delete the HR rule.
+        resp_edit_hr = self.client.put(
+            "/api/admin/workflow",
+            json={
+                "threshold": resp_fin_get.json()["threshold"],
+                "rules": [
+                    {
+                        "id": hr_rule_id,
+                        "title": "Hijacked",
+                        "route": "Finance Admin",
+                        "type": "warning",
+                        "threshold": 91.0,
+                        "document_type": "Invoices",
+                    }
+                ],
+            },
+            headers=self.fin_admin_headers,
+        )
+        self.assertEqual(resp_edit_hr.status_code, 403)
+
         resp_del_bad = self.client.delete(
             f"/api/admin/workflow/rules/{created_rule_id}",
             headers=self.hr_admin_headers,
         )
         self.assertEqual(resp_del_bad.status_code, 403)
+        resp_del_hr_as_fin = self.client.delete(
+            f"/api/admin/workflow/rules/{hr_rule_id}",
+            headers=self.fin_admin_headers,
+        )
+        self.assertEqual(resp_del_hr_as_fin.status_code, 403)
 
-        # Finance Admin can delete own department rule -> 200 OK
+        # Finance Admin can edit and delete own department rule.
+        resp_edit_own = self.client.put(
+            "/api/admin/workflow",
+            json={
+                "threshold": resp_fin_get.json()["threshold"],
+                "rules": [
+                    {
+                        "id": created_rule_id,
+                        "title": "Finance High Value Invoice",
+                        "route": "Finance Admin",
+                        "type": "security",
+                        "threshold": 92.0,
+                        "document_type": "Invoices",
+                        "condition": "confidence_below_threshold",
+                    }
+                ],
+            },
+            headers=self.fin_admin_headers,
+        )
+        self.assertEqual(resp_edit_own.status_code, 200)
+        edited = next(rule for rule in resp_edit_own.json()["rules"] if rule["id"] == created_rule_id)
+        self.assertEqual(edited["type"], "security")
+        self.assertEqual(edited["threshold"], 92.0)
+
         resp_del_ok = self.client.delete(
             f"/api/admin/workflow/rules/{created_rule_id}",
             headers=self.fin_admin_headers,
         )
         self.assertEqual(resp_del_ok.status_code, 200)
+
+        resp_super_del = self.client.delete(
+            f"/api/admin/workflow/rules/{hr_rule_id}",
+            headers=self.super_admin_headers,
+        )
+        self.assertEqual(resp_super_del.status_code, 200)
+
+        # Non-admin roles have no workflow access.
+        resp_maker = self.client.get("/api/admin/workflow", headers=self.fin_maker_headers)
+        self.assertEqual(resp_maker.status_code, 403)
+        resp_checker = self.client.get("/api/admin/workflow/options", headers=self.fin_checker_headers)
+        self.assertEqual(resp_checker.status_code, 403)
 
 if __name__ == "__main__":
     unittest.main()

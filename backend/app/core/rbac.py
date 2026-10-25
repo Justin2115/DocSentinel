@@ -194,6 +194,111 @@ DOCUMENT_TYPE_TO_DEPARTMENT: dict[str, Department] = {
     for doc_type in doc_types
 }
 
+# Workflow routing catalogs used by Settings. Values match existing rule schema
+# and department document-type mappings rather than UI-only lists.
+WORKFLOW_RULE_TYPES: tuple[str, ...] = ("warning", "security", "claims")
+WORKFLOW_CONDITION_CONFIDENCE_BELOW = "confidence_below_threshold"
+WORKFLOW_CONDITIONS: tuple[str, ...] = (WORKFLOW_CONDITION_CONFIDENCE_BELOW,)
+
+
+def known_departments() -> list[str]:
+    return [dept.value for dept in Department]
+
+
+def normalize_known_department(dept_str: str | None) -> str | None:
+    normalized = Department.normalize(dept_str)
+    if not normalized:
+        return None
+    allowed = {dept.value for dept in Department}
+    return normalized if normalized in allowed else None
+
+
+def document_types_for_department(department: str | None) -> list[str]:
+    dept_value = normalize_known_department(department)
+    if not dept_value:
+        return []
+    dept_enum = next((dept for dept in Department if dept.value == dept_value), None)
+    if dept_enum is None:
+        return []
+    return list(DEPARTMENT_DOCUMENT_TYPES.get(dept_enum, []))
+
+
+def department_for_document_type(document_type: str | None) -> str | None:
+    if not document_type or not str(document_type).strip():
+        return None
+    key = str(document_type).strip()
+    mapped = DOCUMENT_TYPE_TO_DEPARTMENT.get(key)
+    if mapped is not None:
+        return mapped.value
+    for doc_type, dept in DOCUMENT_TYPE_TO_DEPARTMENT.items():
+        if doc_type.lower() == key.lower():
+            return dept.value
+    return normalize_known_department(key)
+
+
+def canonical_document_type(document_type: str | None) -> str | None:
+    if not document_type or not str(document_type).strip():
+        return None
+    key = str(document_type).strip()
+    for doc_type in DOCUMENT_TYPE_TO_DEPARTMENT:
+        if doc_type.lower() == key.lower():
+            return doc_type
+    return None
+
+
+def managed_workflow_departments(user: Any) -> list[str]:
+    """Departments the authenticated user may manage workflow routing for."""
+    if not user:
+        return []
+    role = getattr(user, "role", None)
+    if UserRole.is_super_admin(role):
+        return known_departments()
+    if UserRole.is_dept_admin(role):
+        dept = normalize_known_department(getattr(user, "department", None))
+        return [dept] if dept else []
+    return []
+
+
+def can_manage_workflow_department(user: Any, department: str | None) -> bool:
+    dept = normalize_known_department(department)
+    if not dept:
+        return False
+    return dept in managed_workflow_departments(user)
+
+
+def can_manage_workflow_document_type(user: Any, document_type: str | None) -> bool:
+    canonical = canonical_document_type(document_type)
+    if not canonical:
+        return False
+    return can_manage_workflow_department(user, department_for_document_type(canonical))
+
+
+def resolve_workflow_scope_department(user: Any, requested_department: str | None) -> str | None:
+    """
+    Resolve workflow department scope from the authenticated user.
+
+    Client-supplied department is never trusted:
+    - Super Admin may request a known department, or omit it to see all.
+    - Department Admin is always scoped to their assigned department.
+    """
+    requested = normalize_known_department(requested_department) if requested_department else None
+    if requested_department and str(requested_department).strip() and requested is None:
+        raise ValueError("Unknown department")
+
+    role = getattr(user, "role", None)
+    if UserRole.is_super_admin(role):
+        return requested
+
+    if UserRole.is_dept_admin(role):
+        own = normalize_known_department(getattr(user, "department", None))
+        if not own:
+            raise PermissionError("Department Admin has no department assigned")
+        if requested and requested != own:
+            raise PermissionError("Department Admins can only access workflow routing for their assigned department")
+        return own
+
+    raise PermissionError("Workflow routing is limited to Super Admin and Department Admin")
+
 
 def can_view_document(user: Any, document: Any) -> bool:
     """

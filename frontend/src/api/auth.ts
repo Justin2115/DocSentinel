@@ -162,19 +162,52 @@ export interface WorkflowRule {
 	title: string;
 	route: string;
 	document_type?: string | null;
+	department?: string | null;
 	threshold?: number;
+	condition?: string;
 }
 
 export interface WorkflowConfig {
 	threshold: number;
 	rules: WorkflowRule[];
+	can_edit_threshold?: boolean;
+}
+
+export interface WorkflowOptionItem {
+	value: string;
+	label: string;
+	department?: string | null;
+	kind?: string | null;
+}
+
+export interface WorkflowOptions {
+	departments: WorkflowOptionItem[];
+	document_types: WorkflowOptionItem[];
+	routes: WorkflowOptionItem[];
+	rule_types: WorkflowOptionItem[];
+	conditions: WorkflowOptionItem[];
+	priority_supported: boolean;
+	can_edit_threshold: boolean;
+	selected_department?: string | null;
 }
 
 /**
  * Admin only: Get workflow settings and routing rules
  */
-export async function getWorkflowConfig(): Promise<WorkflowConfig> {
-	const response = await apiClient.get<WorkflowConfig>("/admin/workflow");
+export async function getWorkflowConfig(department?: string): Promise<WorkflowConfig> {
+	const response = await apiClient.get<WorkflowConfig>("/admin/workflow", {
+		params: department ? { department } : undefined,
+	});
+	return response.data;
+}
+
+/**
+ * Admin only: Dropdown catalogs for workflow routing, scoped to the authenticated user.
+ */
+export async function getWorkflowOptions(department?: string): Promise<WorkflowOptions> {
+	const response = await apiClient.get<WorkflowOptions>("/admin/workflow/options", {
+		params: department ? { department } : undefined,
+	});
 	return response.data;
 }
 
@@ -192,7 +225,15 @@ export async function updateWorkflowConfig(
  * Admin only: Add a new routing rule
  */
 export async function addWorkflowRule(
-	payload: { title: string; route: string; type?: string; threshold?: number; document_type?: string | null }
+	payload: {
+		title: string;
+		route: string;
+		type?: string;
+		threshold?: number;
+		document_type?: string | null;
+		department?: string | null;
+		condition?: string;
+	}
 ): Promise<WorkflowRule> {
 	const response = await apiClient.post<WorkflowRule>("/admin/workflow/rules", payload);
 	return response.data;
