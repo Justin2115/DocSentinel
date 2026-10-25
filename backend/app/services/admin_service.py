@@ -251,19 +251,25 @@ def check_folder_permission(
     db: Session, folder_or_doc_type: str | None, role: str, action: str = "view"
 ) -> bool:
     """Verify if a role has permission for a specific folder/document type."""
-    normalized_role = UserRole.normalize(role)
-    if normalized_role == UserRole.ADMIN.value:
+    if UserRole.is_super_admin(role):
         return True
 
     if not folder_or_doc_type:
         return True
+
+    normalized_role = UserRole.normalize(role)
+    matched_roles = [normalized_role]
+    if UserRole.is_checker(role):
+        matched_roles.extend(["UPLOAD_CHECKER", "DEPARTMENT_CHECKER"])
+    if UserRole.is_maker(role):
+        matched_roles.extend(["UPLOAD_MAKER", "DEPARTMENT_MAKER"])
 
     perm = (
         db.query(FolderPermission)
         .filter(
             func.lower(FolderPermission.folder_name)
             == folder_or_doc_type.strip().lower(),
-            FolderPermission.role == normalized_role,
+            FolderPermission.role.in_(matched_roles),
         )
         .first()
     )
@@ -281,17 +287,30 @@ def check_folder_permission(
     return perm.can_view
 
 
-def get_workflow_configuration(db: Session) -> dict[str, Any]:
-    """Get active threshold and routing rules."""
+def get_workflow_configuration(db: Session, department: str | None = None) -> dict[str, Any]:
+    """Get active threshold and routing rules, optionally scoped to a department."""
+    from app.core.rbac import DEPARTMENT_DOCUMENT_TYPES, Department
     setting = db.query(WorkflowSetting).first()
     threshold = setting.confidence_threshold if setting else 80.0
 
-    rules = (
+    rules_query = (
         db.query(WorkflowRule)
         .filter(WorkflowRule.is_active == True)
         .order_by(WorkflowRule.id.asc())
-        .all()
     )
+
+    all_rules = rules_query.all()
+    if department:
+        dept_norm = Department.normalize(department)
+        dept_enum = next((d for d in Department if d.value == dept_norm), None)
+        allowed_types = {t.lower() for t in DEPARTMENT_DOCUMENT_TYPES.get(dept_enum, [])} if dept_enum else set()
+        allowed_types.add(str(department).strip().lower())
+        rules = [
+            r for r in all_rules
+            if not r.document_type or r.document_type.strip().lower() in allowed_types
+        ]
+    else:
+        rules = all_rules
 
     return {
         "threshold": threshold,

@@ -19,9 +19,10 @@ class UserResponse(BaseModel):
     department: Optional[str] = None
     profile_picture: Optional[str] = None
     is_active: bool = True
+    has_password: bool = False
+    google_linked: bool = False
     created_at: Optional[datetime] = None
     last_login: Optional[datetime] = None
-
 
 
 class TokenResponse(BaseModel):

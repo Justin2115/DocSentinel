@@ -1,0 +1,10 @@
+# Python virtual environments
+venv/
+backend/venv312/
+
+# Runtime logs and uploaded documents
+backend/logs/
+backend/uploads/
+
+# Local vector database
+backend/vector_db/

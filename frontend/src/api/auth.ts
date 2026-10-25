@@ -8,6 +8,8 @@ export interface User {
 	department?: string | null;
 	profile_picture?: string | null;
 	is_active: boolean;
+	has_password?: boolean;
+	google_linked?: boolean;
 	created_at?: string;
 	last_login?: string | null;
 }
@@ -205,3 +207,57 @@ export async function deleteWorkflowRule(ruleId: number): Promise<{ message: str
 }
 
 
+
+export interface ActivityLogItem {
+	id: number;
+	timestamp: string;
+	actor_id?: number | null;
+	username?: string | null;
+	department?: string | null;
+	role?: string | null;
+	action: string;
+	target_resource?: string | null;
+	status: string;
+	failure_reason?: string | null;
+	correlation_id?: string | null;
+	ip_address?: string | null;
+	details?: string | null;
+}
+
+export interface ActivityLogListResponse {
+	items: ActivityLogItem[];
+	total: number;
+	page: number;
+	page_size: number;
+	total_pages: number;
+}
+
+export interface ActivityLogFilterParams {
+	page?: number;
+	page_size?: number;
+	department?: string;
+	username?: string;
+	action?: string;
+	status?: string;
+	start_date?: string;
+	end_date?: string;
+	search?: string;
+}
+
+/**
+ * Admin only: Fetch activity logs with pagination and filters
+ */
+export async function getActivityLogs(params?: ActivityLogFilterParams): Promise<ActivityLogListResponse> {
+	const response = await apiClient.get<ActivityLogListResponse>("/admin/activity-logs", { params });
+	return response.data;
+}
+
+/**
+ * Admin only: Permanently delete a member from system
+ */
+export async function permanentlyDeleteAdminUser(userId: number): Promise<{ message: string }> {
+	const response = await apiClient.delete<{ message: string }>(`/admin/users/${userId}`, {
+		params: { permanent: true }
+	});
+	return response.data;
+}

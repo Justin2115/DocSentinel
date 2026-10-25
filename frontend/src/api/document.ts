@@ -35,6 +35,7 @@ export interface OCRResult {
 	document_id: number;
 	page_id: number | null;
 	extracted_text: string | null;
+	raw_text?: string | null;
 	confidence: number | null;
 	ocr_engine: string | null;
 	processed_at: string | null;
@@ -332,4 +333,25 @@ export const assignDocumentChecker = (id: number, checkerId: number) =>
 	apiClient.post<DocumentRecord>(
 		`/documents/${id}/assign`,
 		{ checker_id: checkerId }
+	);
+
+export const updateExtractedField = (
+	documentId: number,
+	fieldId: number,
+	fieldValue: string
+) =>
+	apiClient.patch(
+		`/documents/${documentId}/fields/${fieldId}`,
+		{ field_value: fieldValue }
+	);
+
+
+export const updateDocumentOCRText = (
+	documentId: number,
+	ocrId: number,
+	extractedText: string
+) =>
+	apiClient.patch(
+		`/documents/${documentId}/ocr/${ocrId}`,
+		{ extracted_text: extractedText }
 	);

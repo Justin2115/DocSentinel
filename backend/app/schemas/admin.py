@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -56,3 +57,29 @@ class AddWorkflowRuleRequest(BaseModel):
         if not clean:
             raise ValueError("Value cannot be blank")
         return clean
+
+
+class ActivityLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    timestamp: datetime
+    actor_id: Optional[int] = None
+    username: Optional[str] = None
+    department: Optional[str] = None
+    role: Optional[str] = None
+    action: str
+    target_resource: Optional[str] = None
+    status: str
+    failure_reason: Optional[str] = None
+    correlation_id: Optional[str] = None
+    ip_address: Optional[str] = None
+    details: Optional[str] = None
+
+
+class ActivityLogListResponse(BaseModel):
+    items: List[ActivityLogResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

@@ -2,12 +2,20 @@ import { useEffect, useState } from "react";
 
 import ZoomInIcon from "@mui/icons-material/ZoomIn";
 import ZoomOutIcon from "@mui/icons-material/ZoomOut";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
+import SaveIcon from "@mui/icons-material/Save";
 import EditNoteIcon from "@mui/icons-material/EditNote";
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import SearchIcon from "@mui/icons-material/Search";
+import RateReviewIcon from "@mui/icons-material/RateReview";
+import TextFieldsIcon from "@mui/icons-material/TextFields";
+import TableChartIcon from "@mui/icons-material/TableChart";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import {
   Alert,
   Box,
@@ -20,6 +28,8 @@ import {
   DialogTitle,
   IconButton,
   Snackbar,
+  Tab,
+  Tabs,
   TextField,
   Typography,
 } from "@mui/material";
@@ -29,29 +39,42 @@ import {
   approveDocument,
   rejectDocument,
   requestDocumentRevision,
-  pageHasRenderableTable,
+  updateExtractedField,
+  updateDocumentOCRText,
 } from "../api/document";
 import type { DocumentDetail, OCRResult } from "../api/document";
 import { useAuth } from "../context/AuthContext";
 import {
-  CONFIDENCE_EXPLANATIONS,
   formatConfidence,
 } from "../utils/confidence";
 import {
   PageStructuredTables,
-  stripTableBlocks,
 } from "../components/tables/StructuredTables";
 
 export default function ReviewQueue() {
   const { user: currentUser } = useAuth();
   const [documents, setDocuments] = useState<DocumentDetail[]>([]);
-  const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
+  const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Queue list search filter
+  const [queueSearch, setQueueSearch] = useState("");
+
+  // Review detail state
+  const [detailTab, setDetailTab] = useState<"ocr" | "fields" | "info">("ocr");
   const [zoom, setZoom] = useState(100);
-  const [threshold, setThreshold] = useState(100);
+
+  // Editable fields state
+  const [fieldValues, setFieldValues] = useState<Record<number, string>>({});
+  const [savingFieldId, setSavingFieldId] = useState<number | null>(null);
+
+  // Editable OCR text state
+  const [editingOcrId, setEditingOcrId] = useState<number | null>(null);
+  const [ocrTextValues, setOcrTextValues] = useState<Record<number, string>>({});
+  const [savingOcrId, setSavingOcrId] = useState<number | null>(null);
 
   // Dialog states for reject and revision
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
@@ -65,9 +88,6 @@ export default function ReviewQueue() {
       setError(null);
       const response = await getReviewQueueDocuments();
       setDocuments(response.data || []);
-      if (selectedDocumentIndex >= (response.data || []).length) {
-        setSelectedDocumentIndex(0);
-      }
     } catch (err: any) {
       console.error("Failed to load review queue:", err);
       setError(
@@ -82,23 +102,33 @@ export default function ReviewQueue() {
     fetchQueue();
   }, []);
 
-  // The threshold slider keeps the documents a reviewer most needs to look at.
-  // An unmeasured score is unknown quality, so it stays in the queue rather
-  // than being counted as a confident document.
-  const visibleDocuments = documents.filter((doc) => {
-    const conf = doc.overall_confidence ?? 0;
-    return conf <= threshold;
-  });
-
   const activeDoc: DocumentDetail | null =
-    visibleDocuments[selectedDocumentIndex] || null;
+    documents.find((d) => d.id === selectedDocId) || null;
+
+  // Initialize field values when activeDoc changes
+  useEffect(() => {
+    if (activeDoc) {
+      const initialFields: Record<number, string> = {};
+      activeDoc.extracted_fields?.forEach((f) => {
+        initialFields[f.id] = f.corrected_value ?? f.field_value ?? "";
+      });
+      setFieldValues(initialFields);
+
+      const initialOcr: Record<number, string> = {};
+      activeDoc.ocr_results?.forEach((ocr) => {
+        initialOcr[ocr.id] = ocr.extracted_text ?? "";
+      });
+      setOcrTextValues(initialOcr);
+      setEditingOcrId(null);
+      setZoom(100);
+      setDetailTab("ocr");
+    }
+  }, [selectedDocId]);
 
   const ocrPageNumber = (result: OCRResult): number | null =>
     activeDoc?.pages?.find((page) => page.id === result.page_id)?.page_number ??
     null;
 
-  // Why the pipeline queued this document (low measured confidence, failed
-  // pages, a stalled run). Read from the review queue rows the server writes.
   const reviewReasons = Array.from(
     new Set(
       (activeDoc?.review_items ?? [])
@@ -115,17 +145,69 @@ export default function ReviewQueue() {
       activeDoc.uploaded_by === currentUser.id
   );
 
-  const handleDocumentChange = (index: number) => {
-    setSelectedDocumentIndex(index);
-    setZoom(100);
+  // Field update handler
+  const handleFieldSave = async (fieldId: number) => {
+    if (!activeDoc) return;
+    const val = fieldValues[fieldId];
+    if (val === undefined) return;
+    try {
+      setSavingFieldId(fieldId);
+      await updateExtractedField(activeDoc.id, fieldId, val);
+      setSuccessMsg("Extracted field updated successfully.");
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.id === activeDoc.id
+            ? {
+                ...d,
+                extracted_fields: d.extracted_fields?.map((f) =>
+                  f.id === fieldId ? { ...f, field_value: val, corrected_value: val } : f
+                ),
+              }
+            : d
+        )
+      );
+    } catch (err: any) {
+      console.error("Failed to update field:", err);
+      setError(err.response?.data?.detail || "Failed to update field value.");
+    } finally {
+      setSavingFieldId(null);
+    }
   };
 
-  const zoomIn = () => {
-    setZoom((value) => Math.min(value + 10, 200));
-  };
-
-  const zoomOut = () => {
-    setZoom((value) => Math.max(value - 10, 50));
+  // OCR text update handler
+  const handleOcrTextSave = async (ocrId: number) => {
+    if (!activeDoc) return;
+    const newText = ocrTextValues[ocrId];
+    if (newText === undefined) return;
+    try {
+      setSavingOcrId(ocrId);
+      await updateDocumentOCRText(activeDoc.id, ocrId, newText);
+      setSuccessMsg("OCR text updated and original preserved.");
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.id === activeDoc.id
+            ? {
+                ...d,
+                ocr_results: d.ocr_results?.map((ocr) =>
+                  ocr.id === ocrId
+                    ? {
+                        ...ocr,
+                        extracted_text: newText,
+                        raw_text: ocr.raw_text || ocr.extracted_text,
+                      }
+                    : ocr
+                ),
+              }
+            : d
+        )
+      );
+      setEditingOcrId(null);
+    } catch (err: any) {
+      console.error("Failed to update OCR text:", err);
+      setError(err.response?.data?.detail || "Failed to update OCR text.");
+    } finally {
+      setSavingOcrId(null);
+    }
   };
 
   const handleApprove = async () => {
@@ -136,11 +218,9 @@ export default function ReviewQueue() {
       await approveDocument(activeDoc.id);
       setSuccessMsg(`Document #${activeDoc.id} approved successfully.`);
       setDocuments((prev) => prev.filter((d) => d.id !== activeDoc.id));
-      if (selectedDocumentIndex >= visibleDocuments.length - 1) {
-        setSelectedDocumentIndex(Math.max(0, visibleDocuments.length - 2));
-      }
+      setSelectedDocId(null);
     } catch (err: any) {
-      console.error("Approve failed:", err);
+      console.error("Approval failed:", err);
       setError(err.response?.data?.detail || "Failed to approve document.");
     } finally {
       setActionLoading(false);
@@ -152,19 +232,14 @@ export default function ReviewQueue() {
     try {
       setActionLoading(true);
       setError(null);
-      await rejectDocument(
-        activeDoc.id,
-        rejectReason.trim() || "Rejected during checker review"
-      );
-      setSuccessMsg(`Document #${activeDoc.id} has been rejected.`);
+      await rejectDocument(activeDoc.id, rejectReason.trim() || undefined);
+      setSuccessMsg(`Document #${activeDoc.id} rejected.`);
       setRejectDialogOpen(false);
       setRejectReason("");
       setDocuments((prev) => prev.filter((d) => d.id !== activeDoc.id));
-      if (selectedDocumentIndex >= visibleDocuments.length - 1) {
-        setSelectedDocumentIndex(Math.max(0, visibleDocuments.length - 2));
-      }
+      setSelectedDocId(null);
     } catch (err: any) {
-      console.error("Reject failed:", err);
+      console.error("Rejection failed:", err);
       setError(err.response?.data?.detail || "Failed to reject document.");
     } finally {
       setActionLoading(false);
@@ -180,13 +255,11 @@ export default function ReviewQueue() {
         activeDoc.id,
         revisionNotes.trim() || "Revision requested by checker"
       );
-      setSuccessMsg(`Revision requested for Document #${activeDoc.id}.`);
+      setSuccessMsg(`Revision requested for Document #${activeDoc.id}. Returned to maker.`);
       setRevisionDialogOpen(false);
       setRevisionNotes("");
       setDocuments((prev) => prev.filter((d) => d.id !== activeDoc.id));
-      if (selectedDocumentIndex >= visibleDocuments.length - 1) {
-        setSelectedDocumentIndex(Math.max(0, visibleDocuments.length - 2));
-      }
+      setSelectedDocId(null);
     } catch (err: any) {
       console.error("Revision request failed:", err);
       setError(
@@ -197,44 +270,77 @@ export default function ReviewQueue() {
     }
   };
 
-  return (
-    <div className="reviewPage">
+  // Filter queue by search
+  const filteredQueue = documents.filter((doc) => {
+    if (!queueSearch.trim()) return true;
+    const q = queueSearch.toLowerCase();
+    return (
+      doc.original_filename?.toLowerCase().includes(q) ||
+      doc.department?.toLowerCase().includes(q) ||
+      doc.document_type?.toLowerCase().includes(q) ||
+      String(doc.id).includes(q)
+    );
+  });
 
+  return (
+    <div className="reviewPage" style={{ padding: "24px", maxWidth: "1600px", margin: "0 auto" }}>
       {/* ================= HEADER ================= */}
-      <div className="reviewHeader">
+      <div
+        className="reviewHeader"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "20px",
+          flexWrap: "wrap",
+          gap: "12px",
+        }}
+      >
         <div>
-          <h1>Review queue</h1>
-          <p>
-            Verify AI-extracted document metadata, validate compliance, and enforce separation of duties.
-          </p>
+          <Typography variant="h5" sx={{ fontWeight: 700, color: "var(--text-primary, #111827)" }}>
+            Review Queue
+          </Typography>
+          <Typography variant="body2" sx={{ color: "var(--text-secondary, #6b7280)" }}>
+            Review, verify OCR accuracy, edit extracted fields, and make authorization decisions.
+          </Typography>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-          <div className="reviewThreshold">
-            <span>Filter confidence &le;:</span>
-            <input
-              type="range"
-              min="50"
-              max="100"
-              value={threshold}
-              aria-label="Filter documents by maximum confidence"
-              onChange={(event) => setThreshold(Number(event.target.value))}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          {currentUser?.department ? (
+            <Chip
+              label={`Department: ${currentUser.department}`}
+              sx={{
+                bgcolor: "rgba(245, 158, 11, 0.15)",
+                color: "#fbbf24",
+                fontWeight: 600,
+                fontSize: "0.8rem",
+              }}
             />
-            <strong>{threshold}%</strong>
-          </div>
+          ) : (
+            <Chip
+              label="Super Admin · All Departments"
+              sx={{
+                bgcolor: "rgba(16, 185, 129, 0.15)",
+                color: "#10b981",
+                fontWeight: 600,
+                fontSize: "0.8rem",
+              }}
+            />
+          )}
 
           <IconButton
             onClick={fetchQueue}
             disabled={loading}
             sx={{
-              backgroundColor: "rgba(255, 255, 255, 0.05)",
+              backgroundColor: "var(--surface, #ffffff)",
+              border: "1px solid var(--border, #e5e7eb)",
               borderRadius: "10px",
-              "&:hover": { backgroundColor: "rgba(255, 255, 255, 0.1)" },
+              "&:hover": { backgroundColor: "var(--surface-secondary, #f3f4f6)" },
             }}
-            title="Refresh Review Queue"
+            title="Refresh Queue"
             aria-label="Refresh review queue"
           >
-            <RefreshIcon />
+            <RefreshIcon fontSize="small" />
           </IconButton>
         </div>
       </div>
@@ -242,429 +348,858 @@ export default function ReviewQueue() {
       {error && (
         <Alert
           severity="error"
-          sx={{ mb: 2, borderRadius: "10px" }}
+          sx={{ mb: 3, borderRadius: "10px" }}
           onClose={() => setError(null)}
         >
           {error}
         </Alert>
       )}
 
-      {/* ================= WORKSPACE ================= */}
-      <div className="reviewWorkspace">
-        {/* ================= LEFT LIST ================= */}
-        <aside className="reviewList">
-          <div className="reviewListHeader">
-            <div>
-              <h2>Pending Documents</h2>
-              <span>{visibleDocuments.length} needing review</span>
+      {/* ======================================================== */}
+      {/* 1. QUEUE LIST VIEW (When no document is actively opened) */}
+      {/* ======================================================== */}
+      {selectedDocId === null ? (
+        <div className="queueListView">
+          {/* Queue Filter Bar */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "16px",
+              flexWrap: "wrap",
+              gap: "12px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                background: "var(--surface, #ffffff)",
+                border: "1px solid var(--border, #e5e7eb)",
+                borderRadius: "10px",
+                padding: "6px 12px",
+                minWidth: "300px",
+              }}
+            >
+              <SearchIcon sx={{ color: "var(--text-secondary)", fontSize: 20 }} />
+              <input
+                type="text"
+                placeholder="Filter documents in queue..."
+                value={queueSearch}
+                onChange={(e) => setQueueSearch(e.target.value)}
+                style={{
+                  border: "none",
+                  outline: "none",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  fontSize: "0.85rem",
+                  width: "100%",
+                }}
+              />
             </div>
+
+            <Chip
+              label={`${filteredQueue.length} ${filteredQueue.length === 1 ? "Document" : "Documents"} Pending Review`}
+              color="primary"
+              variant="outlined"
+              sx={{ fontWeight: 600, fontSize: "0.85rem" }}
+            />
           </div>
 
-          <div className="reviewListItems">
-            {loading ? (
-              <Box sx={{ display: "flex", justifyContent: "center", py: 6 }}>
-                <CircularProgress size={28} sx={{ color: "var(--accent, #a855f7)" }} />
-              </Box>
-            ) : visibleDocuments.length === 0 ? (
-              <div className="emptyReviewList">
-                <p>No documents currently requiring review.</p>
-              </div>
-            ) : (
-              visibleDocuments.map((item, index) => {
-                const isSelected = selectedDocumentIndex === index;
-                const isItemOwn =
-                  currentUser && item.uploaded_by === currentUser.id;
-
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={
-                      isSelected
-                        ? "reviewListItem active"
-                        : "reviewListItem"
-                    }
-                    onClick={() => handleDocumentChange(index)}
-                  >
-                    <div className="reviewListItemTop">
-                      <div className="reviewDocumentIcon">
-                        <DescriptionOutlinedIcon />
-                      </div>
-
-                      <div className="reviewDocumentName">
-                        <strong>{item.original_filename}</strong>
-                        <span>
-                          {item.department || "General"} · {item.document_type || item.file_type}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="reviewListItemBottom">
-                      <span>ID #{item.id}</span>
-                      {isItemOwn && (
-                        <Chip
-                          label="Your Upload"
-                          size="small"
-                          sx={{
-                            height: 18,
-                            fontSize: "0.6rem",
-                            bgcolor: "rgba(239, 68, 68, 0.15)",
-                            color: "#f87171",
-                          }}
-                        />
-                      )}
-                      <span
-                        className="reviewConfidence"
-                        title={CONFIDENCE_EXPLANATIONS.document}
-                      >
-                        {formatConfidence(item.overall_confidence)}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </aside>
-
-        {/* ================= CENTER + RIGHT ================= */}
-        <section className="reviewDetail">
-          {activeDoc ? (
-            <div className="reviewWorkspaceInner">
-              {/* ================= DOCUMENT VIEWER ================= */}
-              <div className="documentViewer">
-                <div className="documentViewerHeader">
-                  <div className="documentViewerTitle">
-                    <strong>{activeDoc.original_filename}</strong>
-                    <span>
-                      {activeDoc.department || "No Department"} · {activeDoc.document_type || "Document"} (ID #{activeDoc.id})
-                    </span>
-                  </div>
-
-                  <div className="documentViewerControls">
-                    <button type="button" onClick={zoomOut} title="Zoom out">
-                      <ZoomOutIcon />
-                    </button>
-                    <span className="zoomValue">{zoom}%</span>
-                    <button type="button" onClick={zoomIn} title="Zoom in">
-                      <ZoomInIcon />
-                    </button>
-                  </div>
-                </div>
-
-                {/* ================= DOCUMENT PREVIEW CONTENT ================= */}
-                <div className="documentPreview">
-                  <div
-                    className="documentMock"
-                    style={{
-                      transform: `scale(${zoom / 100})`,
-                      transformOrigin: "top center",
-                      width: "100%",
-                      maxWidth: "700px",
-                      padding: "24px",
-                      background: "rgba(255, 255, 255, 0.03)",
-                      borderRadius: "12px",
-                      border: "1px solid rgba(255, 255, 255, 0.08)",
-                      color: "var(--text-primary, #f1f5f9)",
-                    }}
-                  >
-                    <div style={{ marginBottom: "16px", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "12px" }}>
-                      <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-                        {activeDoc.original_filename}
-                      </Typography>
-                      <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mt: 1 }}>
-                        <Chip
-                          label={`Department: ${activeDoc.department || "Unassigned"}`}
-                          size="small"
-                          sx={{ bgcolor: "rgba(245, 158, 11, 0.15)", color: "#fbbf24", fontWeight: 600 }}
-                        />
-                        <Chip
-                          label={`Type: ${activeDoc.document_type || "General"}`}
-                          size="small"
-                          sx={{ bgcolor: "rgba(59, 130, 246, 0.15)", color: "#60a5fa", fontWeight: 600 }}
-                        />
-                        <Chip
-                          label={`Status: ${activeDoc.status || "PENDING_REVIEW"}`}
-                          size="small"
-                          sx={{ bgcolor: "rgba(168, 85, 247, 0.15)", color: "#c084fc", fontWeight: 600 }}
-                        />
-                      </Box>
-                    </div>
-
-                    <Typography variant="subtitle2" sx={{ color: "var(--text-secondary, #94a3b8)", mb: 1, textTransform: "uppercase", fontSize: "0.75rem", letterSpacing: 1 }}>
-                      Extracted Text / OCR Content
-                    </Typography>
-
-                    <Box
-                      sx={{
-                        background: "rgba(0, 0, 0, 0.2)",
-                        p: 2,
-                        borderRadius: "8px",
-                        fontFamily: "monospace",
-                        fontSize: "0.85rem",
-                        lineHeight: 1.6,
-                        maxHeight: "380px",
-                        overflowY: "auto",
-                        whiteSpace: "pre-wrap",
-                      }}
-                    >
-                      {activeDoc.ocr_results && activeDoc.ocr_results.length > 0 ? (
-                        [...activeDoc.ocr_results]
-                          .sort(
-                            (a, b) =>
-                              (ocrPageNumber(a) ?? 0) - (ocrPageNumber(b) ?? 0)
-                          )
-                          .map((res, i) => {
-                            const pageNumber = ocrPageNumber(res);
-                            const measured =
-                              typeof res.confidence === "number" &&
-                              Number.isFinite(res.confidence);
-                            const failed = (res.ocr_engine || "").includes("Failed");
-                            const pageTables = (activeDoc.extracted_tables || []).filter(
-                              (table) =>
-                                pageNumber != null && table.page_number === pageNumber
-                            );
-                            // Rows the reader measured are drawn as a table; the raw
-                            // "cell | cell" copy of them is not shown twice. With no
-                            // structure for the page, the raw text is the fallback.
-                            const rawText =
-                              res.extracted_text ||
-                              (failed
-                                ? "OCR failed on this page: no text was recovered."
-                                : "(No text detected on this page)");
-                            const prose = pageHasRenderableTable(pageTables)
-                              ? stripTableBlocks(rawText)
-                              : rawText;
-
-                            return (
-                              <div key={res.id || i} style={{ marginBottom: "12px" }}>
-                                <div
-                                  title={CONFIDENCE_EXPLANATIONS.page}
-                                  style={{
-                                    color: "#94a3b8",
-                                    fontSize: "0.75rem",
-                                    marginBottom: 4,
-                                  }}
-                                >
-                                  {pageNumber ? `Page ${pageNumber}` : "Whole document"}
-                                  {res.ocr_engine ? ` · ${res.ocr_engine}` : ""}
-                                  {` · ${
-                                    measured
-                                      ? `${formatConfidence(res.confidence)} word confidence`
-                                      : "word confidence not measured"
-                                  }`}
-                                </div>
-                                {pageTables.length > 0 && (
-                                  <PageStructuredTables tables={pageTables} />
-                                )}
-                                {prose ? prose : null}
-                              </div>
-                            );
-                          })
-                      ) : (
-                        <div style={{ color: "#94a3b8", fontStyle: "italic" }}>
-                          No OCR text extracted for this document.
-                        </div>
-                      )}
-                    </Box>
-                  </div>
-                </div>
-
-                {/* ================= VIEWER FOOTER ================= */}
-                <div className="documentViewerFooter">
-                  <span>
-                    Uploaded by: <strong>{activeDoc.uploader_name || `User #${activeDoc.uploaded_by || "System"}`}</strong>
-                  </span>
-                  <span>
-                    Date: <strong>{activeDoc.uploaded_at ? new Date(activeDoc.uploaded_at).toLocaleString() : "Recently"}</strong>
-                  </span>
-                </div>
-              </div>
-
-              {/* ================= RIGHT PANEL ================= */}
-              <aside className="extractedPanel">
-                <div className="extractedPanelHeader">
-                  <div>
-                    <h2>Review &amp; Verify</h2>
-                    <p>Review AI-extracted fields and make authorization decisions.</p>
-                  </div>
-
-                  <div
-                    className="overallConfidence"
-                    title={CONFIDENCE_EXPLANATIONS.document}
-                  >
-                    <span>Overall quality score</span>
-                    <strong>
-                      {formatConfidence(activeDoc.overall_confidence)}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* Why this document is in the queue */}
-                {reviewReasons.length > 0 && (
-                  <Alert
-                    severity="warning"
-                    icon={<WarningAmberIcon />}
-                    sx={{
-                      m: 2,
-                      mb: 0,
-                      borderRadius: "10px",
-                      fontSize: "0.8rem",
-                      bgcolor: "rgba(56, 189, 248, 0.12)",
-                      border: "1px solid rgba(56, 189, 248, 0.3)",
-                      color: "#7dd3fc",
-                    }}
-                  >
-                    <div>
-                      <strong>Why this needs review</strong>
-                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                        {reviewReasons.map((reason) => (
-                          <li key={reason}>{reason}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </Alert>
-                )}
-
-                {/* Separation of Duties Warning */}
-                {isOwnDocument && (
-                  <Alert
-                    severity="warning"
-                    icon={<WarningAmberIcon />}
-                    sx={{
-                      m: 2,
-                      mb: 1,
-                      borderRadius: "10px",
-                      fontSize: "0.8rem",
-                      bgcolor: "rgba(245, 158, 11, 0.12)",
-                      border: "1px solid rgba(245, 158, 11, 0.3)",
-                      color: "#fbbf24",
-                    }}
-                  >
-                    <strong>Separation of Duties:</strong> You uploaded this document. As a security requirement, you cannot approve, reject, or request revisions on your own uploads.
-                  </Alert>
-                )}
-
-                <div className="extractedFields">
-                  <div style={{ padding: "0 16px 12px 16px" }}>
-                    <div className="extractedField">
-                      <div className="extractedFieldHeader">
-                        <label>Department</label>
-                        {/* A chosen department is a fact, not a score; only
-                            auto-detected ones carry any uncertainty. */}
-                        <span className="fieldConfidence">
-                          {activeDoc.department ? "specified" : "auto-detected"}
-                        </span>
-                      </div>
-                      <input type="text" readOnly value={activeDoc.department || "Not specified"} aria-label="Department" />
-                    </div>
-
-                    <div className="extractedField">
-                      <div className="extractedFieldHeader">
-                        <label>Document Type</label>
-                        <span
-                          className="fieldConfidence"
-                          title="Classification confidence is not stored per document, so the overall quality score is shown instead."
-                        >
-                          {formatConfidence(activeDoc.overall_confidence)}
-                        </span>
-                      </div>
-                      <input type="text" readOnly value={activeDoc.document_type || "General Document"} aria-label="Document type" />
-                    </div>
-
-                    {activeDoc.extracted_fields && activeDoc.extracted_fields.length > 0 ? (
-                      activeDoc.extracted_fields.map((field) => {
-                        const strength =
-                          typeof field.confidence === "number" &&
-                          Number.isFinite(field.confidence)
-                            ? Math.round(field.confidence)
-                            : null;
-                        return (
-                          <div className="extractedField" key={field.id || field.field_name}>
-                            <div className="extractedFieldHeader">
-                              <label>{field.field_name}</label>
-                              <span
-                                className={
-                                  strength !== null && strength < 70
-                                    ? "fieldConfidence low"
-                                    : "fieldConfidence"
-                                }
-                                title={CONFIDENCE_EXPLANATIONS.field}
-                              >
-                                {formatConfidence(field.confidence)}
-                              </span>
-                            </div>
-                            <input type="text" defaultValue={field.field_value || ""} aria-label={`${field.field_name} extracted value`} />
-                            <div
-                              className="fieldConfidenceBar"
-                              title={CONFIDENCE_EXPLANATIONS.field}
-                            >
-                              <div
-                                className="fieldConfidenceFill"
-                                style={{ width: `${strength ?? 0}%` }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div style={{ padding: "12px 0", color: "#9ca3af", fontSize: "0.85rem" }}>
-                        No structured key-value fields detected.
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* ================= REVIEW ACTIONS ================= */}
-                <div className="reviewActions">
-                  <button
-                    type="button"
-                    className="rejectButton"
-                    onClick={() => setRejectDialogOpen(true)}
-                    disabled={actionLoading || isOwnDocument}
-                    title={isOwnDocument ? "Separation of duties: Cannot reject your own upload" : "Reject document"}
-                  >
-                    <CloseIcon />
-                    Reject
-                  </button>
-
-                  <button
-                    type="button"
-                    className="revisionButton"
-                    onClick={() => setRevisionDialogOpen(true)}
-                    disabled={actionLoading || isOwnDocument}
-                    title={isOwnDocument ? "Separation of duties: Cannot request revision on your own upload" : "Request revision"}
-                  >
-                    <EditNoteIcon />
-                    Revision
-                  </button>
-
-                  <button
-                    type="button"
-                    className="approveButton"
-                    onClick={handleApprove}
-                    disabled={actionLoading || isOwnDocument}
-                    title={isOwnDocument ? "Separation of duties: Cannot approve your own upload" : "Approve document"}
-                  >
-                    <CheckIcon />
-                    {actionLoading ? "Processing..." : "Approve"}
-                  </button>
-                </div>
-              </aside>
-            </div>
-          ) : (
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", py: 12 }}>
-              <DescriptionOutlinedIcon sx={{ fontSize: 64, color: "var(--text-secondary, #64748b)", mb: 2 }} />
-              <Typography variant="h6" sx={{ color: "var(--text-primary, #f1f5f9)", fontWeight: 600 }}>
-                No Document Selected
-              </Typography>
-              <Typography variant="body2" sx={{ color: "var(--text-secondary, #94a3b8)" }}>
-                Select a document from the left list to review its content.
+          {loading ? (
+            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 10, gap: 2 }}>
+              <CircularProgress size={36} sx={{ color: "var(--primary)" }} />
+              <Typography variant="body2" sx={{ color: "var(--text-secondary)" }}>
+                Loading documents requiring review...
               </Typography>
             </Box>
+          ) : filteredQueue.length === 0 ? (
+            <Box
+              sx={{
+                background: "var(--surface, #ffffff)",
+                border: "1px solid var(--border, #e5e7eb)",
+                borderRadius: "14px",
+                py: 10,
+                textAlign: "center",
+                px: 3,
+              }}
+            >
+              <DescriptionOutlinedIcon sx={{ fontSize: 56, color: "var(--text-secondary)", mb: 2 }} />
+              <Typography variant="h6" sx={{ fontWeight: 700, color: "var(--text-primary)", mb: 1 }}>
+                {queueSearch ? "No matching documents" : "Review Queue is Empty"}
+              </Typography>
+              <Typography variant="body2" sx={{ color: "var(--text-secondary)", maxWidth: "480px", mx: "auto" }}>
+                {queueSearch
+                  ? "No documents match the current filter. Try clearing the search term."
+                  : "All submitted documents have been reviewed and verified. When new documents are uploaded or flagged, they will appear here."}
+              </Typography>
+            </Box>
+          ) : (
+            <div
+              style={{
+                background: "var(--surface, #ffffff)",
+                border: "1px solid var(--border, #e5e7eb)",
+                borderRadius: "14px",
+                overflow: "hidden",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+              }}
+            >
+              <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "0.85rem" }}>
+                <thead>
+                  <tr
+                    style={{
+                      borderBottom: "1px solid var(--border, #e5e7eb)",
+                      background: "var(--surface-secondary, #f9fafb)",
+                      color: "var(--text-secondary, #6b7280)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    <th style={{ padding: "12px 16px" }}>Document</th>
+                    <th style={{ padding: "12px 16px" }}>Department</th>
+                    <th style={{ padding: "12px 16px" }}>Submitted By</th>
+                    <th style={{ padding: "12px 16px" }}>Submission Date</th>
+                    <th style={{ padding: "12px 16px" }}>OCR Quality</th>
+                    <th style={{ padding: "12px 16px" }}>Status</th>
+                    <th style={{ padding: "12px 16px", textAlign: "right" }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredQueue.map((item) => {
+                    const isItemOwn = currentUser && item.uploaded_by === currentUser.id;
+                    const confidenceNum =
+                      typeof item.overall_confidence === "number"
+                        ? Math.round(item.overall_confidence)
+                        : null;
+
+                    return (
+                      <tr
+                        key={item.id}
+                        style={{
+                          borderBottom: "1px solid var(--border, #e5e7eb)",
+                          transition: "background 0.15s ease",
+                        }}
+                        onMouseEnter={(e) =>
+                          (e.currentTarget.style.backgroundColor = "var(--surface-secondary, #f9fafb)")
+                        }
+                        onMouseLeave={(e) =>
+                          (e.currentTarget.style.backgroundColor = "transparent")
+                        }
+                      >
+                        <td style={{ padding: "14px 16px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <div
+                              style={{
+                                width: "36px",
+                                height: "36px",
+                                borderRadius: "8px",
+                                background: "rgba(11, 122, 92, 0.1)",
+                                color: "var(--primary, #0b7a5c)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                flexShrink: 0,
+                              }}
+                            >
+                              <DescriptionOutlinedIcon fontSize="small" />
+                            </div>
+                            <div>
+                              <strong
+                                style={{
+                                  display: "block",
+                                  color: "var(--text-primary, #111827)",
+                                  fontSize: "0.9rem",
+                                }}
+                              >
+                                {item.original_filename}
+                              </strong>
+                              <span style={{ color: "var(--text-secondary, #6b7280)", fontSize: "0.75rem" }}>
+                                ID #{item.id} · {item.document_type || item.file_type || "Document"}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td style={{ padding: "14px 16px" }}>
+                          <Chip
+                            label={item.department || "General"}
+                            size="small"
+                            sx={{
+                              fontSize: "0.75rem",
+                              fontWeight: 600,
+                              bgcolor: "rgba(59, 130, 246, 0.1)",
+                              color: "#2563eb",
+                            }}
+                          />
+                        </td>
+
+                        <td style={{ padding: "14px 16px" }}>
+                          <div>
+                            <span style={{ color: "var(--text-primary)" }}>
+                              {item.uploader_name || `User #${item.uploaded_by || "System"}`}
+                            </span>
+                            {isItemOwn && (
+                              <Chip
+                                label="Your Upload"
+                                size="small"
+                                sx={{
+                                  ml: 1,
+                                  height: 18,
+                                  fontSize: "0.65rem",
+                                  bgcolor: "rgba(239, 68, 68, 0.15)",
+                                  color: "#ef4444",
+                                  fontWeight: 600,
+                                }}
+                              />
+                            )}
+                          </div>
+                        </td>
+
+                        <td style={{ padding: "14px 16px", color: "var(--text-secondary)" }}>
+                          {item.uploaded_at || item.created_at
+                            ? new Date(item.uploaded_at || item.created_at || "").toLocaleDateString(undefined, {
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                              })
+                            : "Recent"}
+                        </td>
+
+                        <td style={{ padding: "14px 16px" }}>
+                          <Chip
+                            label={formatConfidence(item.overall_confidence)}
+                            size="small"
+                            sx={{
+                              fontWeight: 600,
+                              fontSize: "0.75rem",
+                              bgcolor:
+                                confidenceNum !== null && confidenceNum >= 80
+                                  ? "rgba(16, 185, 129, 0.15)"
+                                  : confidenceNum !== null && confidenceNum >= 60
+                                  ? "rgba(245, 158, 11, 0.15)"
+                                  : "rgba(239, 68, 68, 0.15)",
+                              color:
+                                confidenceNum !== null && confidenceNum >= 80
+                                  ? "#10b981"
+                                  : confidenceNum !== null && confidenceNum >= 60
+                                  ? "#f59e0b"
+                                  : "#ef4444",
+                            }}
+                          />
+                        </td>
+
+                        <td style={{ padding: "14px 16px" }}>
+                          <Chip
+                            label="Pending Review"
+                            size="small"
+                            sx={{
+                              bgcolor: "rgba(168, 85, 247, 0.15)",
+                              color: "#a855f7",
+                              fontWeight: 600,
+                              fontSize: "0.75rem",
+                            }}
+                          />
+                        </td>
+
+                        <td style={{ padding: "14px 16px", textAlign: "right" }}>
+                          <Button
+                            variant="contained"
+                            size="small"
+                            onClick={() => setSelectedDocId(item.id)}
+                            startIcon={<RateReviewIcon fontSize="small" />}
+                            sx={{
+                              textTransform: "none",
+                              fontWeight: 600,
+                              fontSize: "0.8rem",
+                              borderRadius: "8px",
+                              bgcolor: "var(--primary, #0b7a5c)",
+                              "&:hover": { bgcolor: "#085a44" },
+                            }}
+                          >
+                            Review Document
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
-        </section>
-      </div>
+        </div>
+      ) : activeDoc ? (
+        /* ======================================================== */
+        /* 2. DEDICATED DOCUMENT REVIEW VIEW                        */
+        /* ======================================================== */
+        <div className="dedicatedReviewView">
+          {/* Top Review Bar */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              background: "var(--surface, #ffffff)",
+              border: "1px solid var(--border, #e5e7eb)",
+              borderRadius: "12px",
+              padding: "12px 18px",
+              marginBottom: "16px",
+              flexWrap: "wrap",
+              gap: "12px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<ArrowBackIcon />}
+                onClick={() => setSelectedDocId(null)}
+                sx={{
+                  textTransform: "none",
+                  borderRadius: "8px",
+                  borderColor: "var(--border)",
+                  color: "var(--text-primary)",
+                  "&:hover": { borderColor: "var(--primary)" },
+                }}
+              >
+                Back to Queue
+              </Button>
+
+              <div>
+                <strong style={{ fontSize: "1rem", color: "var(--text-primary)", display: "block" }}>
+                  {activeDoc.original_filename}
+                </strong>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                  Document ID #{activeDoc.id} · {activeDoc.department || "General"} · {activeDoc.document_type || "General Document"}
+                </span>
+              </div>
+            </div>
+
+            {/* Verification Decision Actions */}
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <Button
+                variant="outlined"
+                color="error"
+                size="small"
+                startIcon={<CloseIcon />}
+                onClick={() => setRejectDialogOpen(true)}
+                disabled={actionLoading || isOwnDocument}
+                title={isOwnDocument ? "Separation of duties: Cannot reject your own upload" : "Reject document"}
+                sx={{ textTransform: "none", borderRadius: "8px", fontWeight: 600 }}
+              >
+                Reject
+              </Button>
+
+              <Button
+                variant="outlined"
+                color="warning"
+                size="small"
+                startIcon={<EditNoteIcon />}
+                onClick={() => setRevisionDialogOpen(true)}
+                disabled={actionLoading || isOwnDocument}
+                title={isOwnDocument ? "Separation of duties: Cannot request revision on your own upload" : "Request revision"}
+                sx={{ textTransform: "none", borderRadius: "8px", fontWeight: 600 }}
+              >
+                Request Revision
+              </Button>
+
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<CheckIcon />}
+                onClick={handleApprove}
+                disabled={actionLoading || isOwnDocument}
+                title={isOwnDocument ? "Separation of duties: Cannot approve your own upload" : "Approve document"}
+                sx={{
+                  textTransform: "none",
+                  borderRadius: "8px",
+                  fontWeight: 600,
+                  bgcolor: "var(--primary, #0b7a5c)",
+                  "&:hover": { bgcolor: "#085a44" },
+                }}
+              >
+                {actionLoading ? "Processing..." : "Approve Document"}
+              </Button>
+            </div>
+          </div>
+
+          {/* Separation of Duties Alert */}
+          {isOwnDocument && (
+            <Alert
+              severity="warning"
+              icon={<WarningAmberIcon />}
+              sx={{
+                mb: 2,
+                borderRadius: "10px",
+                fontSize: "0.85rem",
+              }}
+            >
+              <strong>Separation of Duties Notice:</strong> You uploaded this document. As a required security safeguard, you cannot approve, reject, or request revisions on documents you submitted. Another authorized reviewer must perform the review.
+            </Alert>
+          )}
+
+          {/* Workspace: Left (Preview) + Right (Extracted Text & Metadata Workspace) */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "20px",
+              minHeight: "680px",
+            }}
+          >
+            {/* ================= LEFT: ORIGINAL PREVIEW ================= */}
+            <div
+              style={{
+                background: "var(--surface, #ffffff)",
+                border: "1px solid var(--border, #e5e7eb)",
+                borderRadius: "14px",
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+              }}
+            >
+              {/* Preview Bar */}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "10px 16px",
+                  borderBottom: "1px solid var(--border, #e5e7eb)",
+                  background: "var(--surface-secondary, #f9fafb)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <DescriptionOutlinedIcon fontSize="small" sx={{ color: "var(--primary)" }} />
+                  <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                    Original Document Preview
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  <IconButton
+                    size="small"
+                    onClick={() => setZoom((z) => Math.max(50, z - 10))}
+                    title="Zoom Out"
+                  >
+                    <ZoomOutIcon fontSize="small" />
+                  </IconButton>
+                  <span style={{ fontSize: "0.75rem", minWidth: "40px", textAlign: "center", color: "var(--text-secondary)" }}>
+                    {zoom}%
+                  </span>
+                  <IconButton
+                    size="small"
+                    onClick={() => setZoom((z) => Math.min(200, z + 10))}
+                    title="Zoom In"
+                  >
+                    <ZoomInIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    onClick={() => setZoom(100)}
+                    title="Reset Zoom"
+                  >
+                    <RestartAltIcon fontSize="small" />
+                  </IconButton>
+                </div>
+              </div>
+
+              {/* Preview Container */}
+              <div
+                style={{
+                  flex: 1,
+                  padding: "20px",
+                  overflow: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  background: "var(--background, #f8f7f4)",
+                }}
+              >
+                <div
+                  style={{
+                    transform: `scale(${zoom / 100})`,
+                    transformOrigin: "top center",
+                    width: "100%",
+                    maxWidth: "650px",
+                    background: "var(--surface, #ffffff)",
+                    border: "1px solid var(--border, #e5e7eb)",
+                    borderRadius: "10px",
+                    padding: "24px",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: "12px", marginBottom: "16px" }}>
+                    <Typography variant="h6" sx={{ fontWeight: 700, fontSize: "1.1rem" }}>
+                      {activeDoc.original_filename}
+                    </Typography>
+                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
+                      <Chip label={`Dept: ${activeDoc.department || "General"}`} size="small" />
+                      <Chip label={`Format: ${activeDoc.file_type || "File"}`} size="small" variant="outlined" />
+                      <Chip label={`Pages: ${activeDoc.pages?.length || 1}`} size="small" variant="outlined" />
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "16px" }}>
+                    Uploaded: {activeDoc.uploaded_at ? new Date(activeDoc.uploaded_at).toLocaleString() : "Recently"} by{" "}
+                    <strong>{activeDoc.uploader_name || `User #${activeDoc.uploaded_by || "System"}`}</strong>
+                  </div>
+
+                  {/* Document preview pages / content rendering */}
+                  <Box
+                    sx={{
+                      p: 2,
+                      borderRadius: "8px",
+                      background: "var(--surface-secondary, #f9fafb)",
+                      border: "1px solid var(--border, #e5e7eb)",
+                      fontFamily: "monospace",
+                      fontSize: "0.8rem",
+                      lineHeight: 1.6,
+                      maxHeight: "440px",
+                      overflowY: "auto",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {activeDoc.ocr_results && activeDoc.ocr_results.length > 0 ? (
+                      activeDoc.ocr_results.map((res, i) => (
+                        <div key={res.id || i} style={{ marginBottom: "16px" }}>
+                          <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--primary)", marginBottom: 4 }}>
+                            --- PAGE {ocrPageNumber(res) || i + 1} ---
+                          </div>
+                          <div>{res.raw_text || res.extracted_text || "(Empty page)"}</div>
+                        </div>
+                      ))
+                    ) : (
+                      <div style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>
+                        Document content preview is being rendered.
+                      </div>
+                    )}
+                  </Box>
+                </div>
+              </div>
+            </div>
+
+            {/* ================= RIGHT: EXTRACTED CONTENT & CORRECTION WORKSPACE ================= */}
+            <div
+              style={{
+                background: "var(--surface, #ffffff)",
+                border: "1px solid var(--border, #e5e7eb)",
+                borderRadius: "14px",
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+              }}
+            >
+              {/* Workspace Navigation Tabs */}
+              <Box sx={{ borderBottom: 1, borderColor: "var(--border, #e5e7eb)", bgcolor: "var(--surface-secondary, #f9fafb)" }}>
+                <Tabs
+                  value={detailTab}
+                  onChange={(_, val) => setDetailTab(val)}
+                  textColor="primary"
+                  indicatorColor="primary"
+                  sx={{ minHeight: "44px" }}
+                >
+                  <Tab
+                    value="ocr"
+                    icon={<TextFieldsIcon fontSize="small" />}
+                    iconPosition="start"
+                    label="OCR Text Editor"
+                    sx={{ textTransform: "none", fontWeight: 600, fontSize: "0.85rem", minHeight: "44px" }}
+                  />
+                  <Tab
+                    value="fields"
+                    icon={<TableChartIcon fontSize="small" />}
+                    iconPosition="start"
+                    label={`Extracted Fields (${activeDoc.extracted_fields?.length || 0})`}
+                    sx={{ textTransform: "none", fontWeight: 600, fontSize: "0.85rem", minHeight: "44px" }}
+                  />
+                  <Tab
+                    value="info"
+                    icon={<InfoOutlinedIcon fontSize="small" />}
+                    iconPosition="start"
+                    label="Warnings & Details"
+                    sx={{ textTransform: "none", fontWeight: 600, fontSize: "0.85rem", minHeight: "44px" }}
+                  />
+                </Tabs>
+              </Box>
+
+              {/* TAB 1: OCR TEXT CORRECTION EDITOR */}
+              {detailTab === "ocr" && (
+                <div style={{ padding: "18px", flex: 1, overflowY: "auto" }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: "var(--text-primary)" }}>
+                    Page-by-Page OCR Text Verification
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: "var(--text-secondary)", fontSize: "0.8rem", mb: 2 }}>
+                    Review recognized OCR text. Authorised checkers can correct distorted characters or erroneous words while preserving the original recognition trail.
+                  </Typography>
+
+                  {activeDoc.ocr_results && activeDoc.ocr_results.length > 0 ? (
+                    activeDoc.ocr_results.map((res) => {
+                      const pageNum = ocrPageNumber(res);
+                      const isEditing = editingOcrId === res.id;
+                      const isSaving = savingOcrId === res.id;
+                      const pageTables = (activeDoc.extracted_tables || []).filter(
+                        (t) => pageNum != null && t.page_number === pageNum
+                      );
+
+                      return (
+                        <div
+                          key={res.id}
+                          style={{
+                            background: "var(--background, #f8f7f4)",
+                            border: "1px solid var(--border, #e5e7eb)",
+                            borderRadius: "10px",
+                            padding: "14px",
+                            marginBottom: "16px",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                            <div>
+                              <strong style={{ fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                                Page {pageNum || 1}
+                              </strong>
+                              {res.confidence != null && (
+                                <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginLeft: "8px" }}>
+                                  ({formatConfidence(res.confidence)} confidence)
+                                </span>
+                              )}
+                            </div>
+
+                            {!isEditing ? (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={() => setEditingOcrId(res.id)}
+                                disabled={isOwnDocument}
+                                sx={{ textTransform: "none", fontSize: "0.75rem", borderRadius: "6px" }}
+                              >
+                                Edit OCR Text
+                              </Button>
+                            ) : (
+                              <div style={{ display: "flex", gap: "6px" }}>
+                                <Button
+                                  size="small"
+                                  onClick={() => setEditingOcrId(null)}
+                                  disabled={isSaving}
+                                  sx={{ textTransform: "none", fontSize: "0.75rem", color: "var(--text-secondary)" }}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="contained"
+                                  onClick={() => handleOcrTextSave(res.id)}
+                                  disabled={isSaving}
+                                  sx={{ textTransform: "none", fontSize: "0.75rem", borderRadius: "6px", bgcolor: "var(--primary)" }}
+                                >
+                                  {isSaving ? "Saving..." : "Save Corrections"}
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Render structured tables if present on this page */}
+                          {pageTables.length > 0 && (
+                            <Box sx={{ mb: 2 }}>
+                              <PageStructuredTables tables={pageTables} />
+                            </Box>
+                          )}
+
+                          {isEditing ? (
+                            <TextField
+                              fullWidth
+                              multiline
+                              minRows={6}
+                              maxRows={14}
+                              value={ocrTextValues[res.id] ?? ""}
+                              onChange={(e) =>
+                                setOcrTextValues((prev) => ({ ...prev, [res.id]: e.target.value }))
+                              }
+                              sx={{
+                                "& .MuiInputBase-input": {
+                                  fontFamily: "monospace",
+                                  fontSize: "0.8rem",
+                                  lineHeight: 1.5,
+                                },
+                              }}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                fontFamily: "monospace",
+                                fontSize: "0.8rem",
+                                lineHeight: 1.6,
+                                whiteSpace: "pre-wrap",
+                                color: "var(--text-primary)",
+                                background: "var(--surface, #ffffff)",
+                                padding: "10px",
+                                borderRadius: "6px",
+                                border: "1px solid var(--border)",
+                                maxHeight: "240px",
+                                overflowY: "auto",
+                              }}
+                            >
+                              {res.extracted_text || "(No text recorded on this page)"}
+                            </div>
+                          )}
+
+                          {res.raw_text && res.raw_text !== res.extracted_text && (
+                            <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginTop: "6px", fontStyle: "italic" }}>
+                              Original OCR: {res.raw_text.slice(0, 100)}...
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <Typography variant="body2" sx={{ color: "var(--text-secondary)", fontStyle: "italic" }}>
+                      No OCR text extracted for this document.
+                    </Typography>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2: EXTRACTED FIELDS & METADATA EDITOR */}
+              {detailTab === "fields" && (
+                <div style={{ padding: "18px", flex: 1, overflowY: "auto" }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: "var(--text-primary)" }}>
+                    AI-Extracted Metadata &amp; Key-Value Pairs
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: "var(--text-secondary)", fontSize: "0.8rem", mb: 2 }}>
+                    Authorised reviewers can inspect and correct extracted entities before final approval.
+                  </Typography>
+
+                  {activeDoc.extracted_fields && activeDoc.extracted_fields.length > 0 ? (
+                    activeDoc.extracted_fields.map((field) => {
+                      const currentVal =
+                        fieldValues[field.id] !== undefined
+                          ? fieldValues[field.id]
+                          : field.field_value || "";
+                      const isSaving = savingFieldId === field.id;
+                      const isModified =
+                        (field.original_value && field.original_value !== currentVal) ||
+                        (field.corrected_value && field.corrected_value !== field.original_value);
+
+                      return (
+                        <div
+                          key={field.id}
+                          style={{
+                            background: "var(--background, #f8f7f4)",
+                            border: "1px solid var(--border, #e5e7eb)",
+                            borderRadius: "10px",
+                            padding: "12px 14px",
+                            marginBottom: "12px",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                            <strong style={{ fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                              {field.field_name}
+                            </strong>
+                            <Chip
+                              label={formatConfidence(field.confidence)}
+                              size="small"
+                              sx={{
+                                fontSize: "0.7rem",
+                                height: 20,
+                                fontWeight: 600,
+                                bgcolor:
+                                  field.confidence && field.confidence >= 80
+                                    ? "rgba(16, 185, 129, 0.15)"
+                                    : "rgba(245, 158, 11, 0.15)",
+                                color:
+                                  field.confidence && field.confidence >= 80 ? "#10b981" : "#f59e0b",
+                              }}
+                            />
+                          </div>
+
+                          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                            <TextField
+                              size="small"
+                              fullWidth
+                              value={currentVal}
+                              onChange={(e) =>
+                                setFieldValues((prev) => ({ ...prev, [field.id]: e.target.value }))
+                              }
+                              sx={{ "& .MuiInputBase-input": { fontSize: "0.85rem" } }}
+                            />
+                            <IconButton
+                              size="small"
+                              onClick={() => handleFieldSave(field.id)}
+                              disabled={isSaving || isOwnDocument}
+                              title="Save field change"
+                              sx={{
+                                bgcolor: "rgba(11, 122, 92, 0.1)",
+                                color: "var(--primary)",
+                                "&:hover": { bgcolor: "rgba(11, 122, 92, 0.2)" },
+                              }}
+                            >
+                              {isSaving ? <CircularProgress size={16} /> : <SaveIcon fontSize="small" />}
+                            </IconButton>
+                          </div>
+
+                          {isModified && (
+                            <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginTop: "4px" }}>
+                              Original value: <span style={{ fontStyle: "italic" }}>{field.original_value}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <Typography variant="body2" sx={{ color: "var(--text-secondary)", fontStyle: "italic" }}>
+                      No structured key-value fields detected on this document.
+                    </Typography>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 3: WARNINGS & AUDIT INFO */}
+              {detailTab === "info" && (
+                <div style={{ padding: "18px", flex: 1, overflowY: "auto" }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: "var(--text-primary)" }}>
+                    Document Warnings &amp; Quality Audit
+                  </Typography>
+
+                  {/* Quality Reasons */}
+                  {reviewReasons.length > 0 ? (
+                    <Alert severity="warning" sx={{ mb: 2, borderRadius: "10px" }}>
+                      <strong>Auto-Flag Reasons:</strong>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                        {reviewReasons.map((r) => (
+                          <li key={r}>{r}</li>
+                        ))}
+                      </ul>
+                    </Alert>
+                  ) : (
+                    <Alert severity="info" sx={{ mb: 2, borderRadius: "10px" }}>
+                      No automated quality warnings flagged. Normal verification required.
+                    </Alert>
+                  )}
+
+                  <Box sx={{ mt: 2, background: "var(--background)", p: 2, borderRadius: "10px", border: "1px solid var(--border)" }}>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      <strong>Overall Quality Score:</strong> {formatConfidence(activeDoc.overall_confidence)}
+                    </Typography>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      <strong>Document Type:</strong> {activeDoc.document_type || "General Document"}
+                    </Typography>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      <strong>Department:</strong> {activeDoc.department || "Unassigned"}
+                    </Typography>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      <strong>Uploaded By:</strong> {activeDoc.uploader_name || `User #${activeDoc.uploaded_by || "System"}`}
+                    </Typography>
+                    <Typography variant="body2">
+                      <strong>Submission Timestamp:</strong> {activeDoc.uploaded_at ? new Date(activeDoc.uploaded_at).toLocaleString() : "Recently"}
+                    </Typography>
+                  </Box>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Reject Confirmation Dialog */}
       <Dialog
@@ -673,46 +1208,42 @@ export default function ReviewQueue() {
         slotProps={{
           paper: {
             sx: {
-              background: "#1e293b",
-              color: "#f8fafc",
-              borderRadius: "16px",
+              background: "var(--surface, #ffffff)",
+              color: "var(--text-primary, #111827)",
+              borderRadius: "14px",
               minWidth: "400px",
+              border: "1px solid var(--border, #e5e7eb)",
             },
           },
         }}
       >
-        <DialogTitle sx={{ fontWeight: 700 }}>Reject Document</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 700 }}>Reject Document #{activeDoc?.id}</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" sx={{ color: "#94a3b8", mb: 2 }}>
-            Provide a reason for rejecting document #{activeDoc?.id}.
+          <Typography variant="body2" sx={{ color: "var(--text-secondary)", mb: 2 }}>
+            Provide a clear reason for rejecting this document. This decision will be logged to the Activity Log.
           </Typography>
           <TextField
             autoFocus
             fullWidth
-            multiline
-            rows={3}
-            placeholder="e.g. Document image is illegible or missing required signatures."
+            size="small"
+            label="Rejection Reason"
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
-            sx={{
-              backgroundColor: "rgba(255, 255, 255, 0.05)",
-              borderRadius: "8px",
-              "& .MuiInputBase-input": { color: "#f8fafc" },
-            }}
+            placeholder="e.g. Unreadable scan, missing signature, mismatched totals..."
           />
         </DialogContent>
-        <DialogActions sx={{ p: 2 }}>
-          <Button onClick={() => setRejectDialogOpen(false)} sx={{ color: "#94a3b8" }}>
+        <DialogActions sx={{ p: 2, pt: 0 }}>
+          <Button onClick={() => setRejectDialogOpen(false)} sx={{ color: "var(--text-secondary)" }}>
             Cancel
           </Button>
           <Button
-            onClick={handleRejectConfirm}
             variant="contained"
             color="error"
+            onClick={handleRejectConfirm}
             disabled={actionLoading}
-            sx={{ borderRadius: "8px", fontWeight: 600 }}
+            sx={{ fontWeight: 600, borderRadius: "8px" }}
           >
-            {actionLoading ? "Rejecting..." : "Confirm Reject"}
+            {actionLoading ? "Rejecting..." : "Confirm Rejection"}
           </Button>
         </DialogActions>
       </Dialog>
@@ -724,64 +1255,55 @@ export default function ReviewQueue() {
         slotProps={{
           paper: {
             sx: {
-              background: "#1e293b",
-              color: "#f8fafc",
-              borderRadius: "16px",
+              background: "var(--surface, #ffffff)",
+              color: "var(--text-primary, #111827)",
+              borderRadius: "14px",
               minWidth: "400px",
+              border: "1px solid var(--border, #e5e7eb)",
             },
           },
         }}
       >
-        <DialogTitle sx={{ fontWeight: 700 }}>Request Revision</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 700 }}>Request Revision for Document #{activeDoc?.id}</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" sx={{ color: "#94a3b8", mb: 2 }}>
-            Specify the required corrections for the uploader of document #{activeDoc?.id}.
+          <Typography variant="body2" sx={{ color: "var(--text-secondary)", mb: 2 }}>
+            Specify instructions for the uploader. The document will return to the Maker's workspace for revision.
           </Typography>
           <TextField
             autoFocus
             fullWidth
             multiline
             rows={3}
-            placeholder="e.g. Please re-upload with page 2 clearly legible and high resolution."
+            size="small"
+            label="Revision Instructions"
             value={revisionNotes}
             onChange={(e) => setRevisionNotes(e.target.value)}
-            sx={{
-              backgroundColor: "rgba(255, 255, 255, 0.05)",
-              borderRadius: "8px",
-              "& .MuiInputBase-input": { color: "#f8fafc" },
-            }}
+            placeholder="e.g. Please re-scan page 2 with higher resolution..."
           />
         </DialogContent>
-        <DialogActions sx={{ p: 2 }}>
-          <Button onClick={() => setRevisionDialogOpen(false)} sx={{ color: "#94a3b8" }}>
+        <DialogActions sx={{ p: 2, pt: 0 }}>
+          <Button onClick={() => setRevisionDialogOpen(false)} sx={{ color: "var(--text-secondary)" }}>
             Cancel
           </Button>
           <Button
-            onClick={handleRevisionConfirm}
             variant="contained"
-            sx={{
-              borderRadius: "8px",
-              fontWeight: 600,
-              backgroundColor: "#d97706",
-              "&:hover": { backgroundColor: "#b45309" },
-            }}
+            color="warning"
+            onClick={handleRevisionConfirm}
             disabled={actionLoading}
+            sx={{ fontWeight: 600, borderRadius: "8px" }}
           >
-            {actionLoading ? "Submitting..." : "Submit Revision Request"}
+            {actionLoading ? "Submitting..." : "Send Revision Request"}
           </Button>
         </DialogActions>
       </Dialog>
 
+      {/* Feedback Snackbar */}
       <Snackbar
         open={Boolean(successMsg)}
         autoHideDuration={4000}
         onClose={() => setSuccessMsg(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-      >
-        <Alert severity="success" onClose={() => setSuccessMsg(null)}>
-          {successMsg}
-        </Alert>
-      </Snackbar>
+        message={successMsg}
+      />
     </div>
   );
 }

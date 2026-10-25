@@ -100,7 +100,7 @@ const DEPARTMENTS: {
 ];
 
 export default function Upload() {
-  const { canReview } = useAuth();
+  const { canReview, isSuperAdmin } = useAuth();
 
   const [selectedFile, setSelectedFile] =
     useState<SelectedFile | null>(null);
@@ -404,7 +404,7 @@ export default function Upload() {
     try {
       const response = await uploadDocumentRequest(
         selectedFile.file,
-        selectedDepartment !== "auto" ? selectedDepartment : undefined,
+        (isSuperAdmin && selectedDepartment !== "auto") ? selectedDepartment : undefined,
         undefined,
         setUploadPercent
       );
@@ -513,46 +513,48 @@ export default function Upload() {
           Maximum file size: 25 MB
         </span>
 
-        {/* ================= DEPARTMENT CATEGORIZATION ================= */}
+        {/* ================= DEPARTMENT CATEGORIZATION (SUPER ADMIN ONLY) ================= */}
 
-        <div
-          className="departmentSelector ocrLanguageSelector"
-          onClick={(event) =>
-            event.stopPropagation()
-          }
-        >
-          <label
-            htmlFor="doc-department"
-            className="ocrLanguageLabel"
-          >
-            Target Department (Optional)
-          </label>
-
-          <select
-            id="doc-department"
-            className="ocrLanguageSelect"
-            value={selectedDepartment}
-            onChange={(event) =>
-              setSelectedDepartment(
-                event.target.value as DepartmentType
-              )
+        {isSuperAdmin && (
+          <div
+            className="departmentSelector ocrLanguageSelector"
+            onClick={(event) =>
+              event.stopPropagation()
             }
-            disabled={isUploading}
           >
-            {DEPARTMENTS.map((dept) => (
-              <option
-                key={dept.value}
-                value={dept.value}
-              >
-                {dept.label}
-              </option>
-            ))}
-          </select>
+            <label
+              htmlFor="doc-department"
+              className="ocrLanguageLabel"
+            >
+              Target Department (Optional)
+            </label>
 
-          <span className="ocrLanguageHint">
-            Select a target department or let AI classify automatically. Language is detected automatically.
-          </span>
-        </div>
+            <select
+              id="doc-department"
+              className="ocrLanguageSelect"
+              value={selectedDepartment}
+              onChange={(event) =>
+                setSelectedDepartment(
+                  event.target.value as DepartmentType
+                )
+              }
+              disabled={isUploading}
+            >
+              {DEPARTMENTS.map((dept) => (
+                <option
+                  key={dept.value}
+                  value={dept.value}
+                >
+                  {dept.label}
+                </option>
+              ))}
+            </select>
+
+            <span className="ocrLanguageHint">
+              Select a target department or let AI classify automatically. Language is detected automatically.
+            </span>
+          </div>
+        )}
       </div>
 
       {/* ================= SELECTED FILE ================= */}
@@ -800,52 +802,7 @@ export default function Upload() {
 
       <div className="uploadInfoGrid">
 
-        <div className="uploadInfoCard">
 
-          <h3>
-            What happens next?
-          </h3>
-
-          <div className="uploadStep">
-            <span>1</span>
-
-            <div>
-              <strong>Upload</strong>
-
-              <p>
-                Your document is securely
-                added to the system.
-              </p>
-            </div>
-          </div>
-
-          <div className="uploadStep">
-            <span>2</span>
-
-            <div>
-              <strong>Process</strong>
-
-              <p>
-                OCR and document processing
-                prepare your content.
-              </p>
-            </div>
-          </div>
-
-          <div className="uploadStep">
-            <span>3</span>
-
-            <div>
-              <strong>Analyze</strong>
-
-              <p>
-                Your document becomes
-                searchable and ready for AI.
-              </p>
-            </div>
-          </div>
-
-        </div>
 
         <div className="uploadInfoCard supportedCard">
 

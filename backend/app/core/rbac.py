@@ -3,40 +3,112 @@ from typing import Any
 
 
 class UserRole(str, Enum):
+    # Four primary roles
+    SUPER_ADMIN = "SUPER_ADMIN"
+    DEPARTMENT_ADMIN = "DEPARTMENT_ADMIN"
+    DEPARTMENT_CHECKER = "DEPARTMENT_CHECKER"
+    DEPARTMENT_MAKER = "DEPARTMENT_MAKER"
+
+    # Backward compatibility aliases
     ADMIN = "ADMIN"
-    UPLOAD_MAKER = "UPLOAD_MAKER"
     UPLOAD_CHECKER = "UPLOAD_CHECKER"
+    UPLOAD_MAKER = "UPLOAD_MAKER"
 
     @classmethod
     def normalize(cls, role_str: str | None) -> str:
-        """Normalize role string case-insensitively, handling legacy 'admin' and 'user'."""
+        """Normalize role string case-insensitively to standard internal string."""
         if not role_str:
-            return cls.UPLOAD_MAKER.value
+            return cls.DEPARTMENT_MAKER.value
         clean = role_str.strip().upper().replace(" ", "_")
+        if clean in ("SUPER_ADMIN", "SUPERADMIN", "SUPER_ADMINISTRATOR"):
+            return cls.SUPER_ADMIN.value
         if clean in ("ADMIN", "ADMINISTRATOR"):
-            return cls.ADMIN.value
-        if clean in ("UPLOAD_CHECKER", "CHECKER"):
-            return cls.UPLOAD_CHECKER.value
-        if clean in ("UPLOAD_MAKER", "MAKER", "USER", "EDITOR", "VIEWER"):
-            return cls.UPLOAD_MAKER.value
-        return cls.UPLOAD_MAKER.value
+            return cls.SUPER_ADMIN.value
+        if clean in ("DEPARTMENT_ADMIN", "DEPT_ADMIN", "DEPARTMENTADMIN", "DEPTADMIN"):
+            return cls.DEPARTMENT_ADMIN.value
+        if clean in ("DEPARTMENT_CHECKER", "DEPT_CHECKER", "UPLOAD_CHECKER", "CHECKER"):
+            return cls.DEPARTMENT_CHECKER.value
+        if clean in ("DEPARTMENT_MAKER", "DEPT_MAKER", "UPLOAD_MAKER", "MAKER", "USER", "EDITOR", "VIEWER"):
+            return cls.DEPARTMENT_MAKER.value
+        return cls.DEPARTMENT_MAKER.value
+
+    @classmethod
+    def is_super_admin(cls, role_str: str | None) -> bool:
+        if not role_str:
+            return False
+        clean = role_str.strip().upper().replace(" ", "_")
+        return clean in ("SUPER_ADMIN", "SUPERADMIN", "SUPER_ADMINISTRATOR", "ADMIN", "ADMINISTRATOR")
+
+    @classmethod
+    def is_dept_admin(cls, role_str: str | None) -> bool:
+        if not role_str:
+            return False
+        clean = role_str.strip().upper().replace(" ", "_")
+        return clean in ("DEPARTMENT_ADMIN", "DEPT_ADMIN", "DEPARTMENTADMIN", "DEPTADMIN")
+
+    @classmethod
+    def is_admin(cls, role_str: str | None) -> bool:
+        return cls.is_super_admin(role_str) or cls.is_dept_admin(role_str)
+
+    @classmethod
+    def is_checker(cls, role_str: str | None) -> bool:
+        if not role_str:
+            return False
+        clean = role_str.strip().upper().replace(" ", "_")
+        return clean in (
+            "DEPARTMENT_CHECKER", "DEPT_CHECKER", "UPLOAD_CHECKER", "CHECKER",
+            "SUPER_ADMIN", "ADMIN", "DEPARTMENT_ADMIN", "DEPT_ADMIN"
+        )
+
+    @classmethod
+    def is_maker(cls, role_str: str | None) -> bool:
+        if not role_str:
+            return False
+        clean = role_str.strip().upper().replace(" ", "_")
+        return clean in (
+            "DEPARTMENT_MAKER", "DEPT_MAKER", "UPLOAD_MAKER", "MAKER", "USER",
+            "SUPER_ADMIN", "ADMIN", "DEPARTMENT_ADMIN", "DEPT_ADMIN"
+        )
+
+    @classmethod
+    def is_strict_maker(cls, role_str: str | None) -> bool:
+        if not role_str:
+            return True
+        clean = role_str.strip().upper().replace(" ", "_")
+        return clean in ("DEPARTMENT_MAKER", "DEPT_MAKER", "UPLOAD_MAKER", "MAKER", "USER", "EDITOR", "VIEWER")
 
     @classmethod
     def parse_assignment(cls, role_str: str | None) -> str | None:
-        """Accept only the three supported role values for new assignments."""
+        """Accept supported role values for assignments, preserving legacy tests while supporting 4 roles."""
         if not role_str:
             return None
         clean = role_str.strip().upper().replace(" ", "_")
-        return clean if clean in {role.value for role in cls} else None
+        if clean in ("SUPER_ADMIN", "SUPERADMIN", "SUPER_ADMINISTRATOR"):
+            return cls.SUPER_ADMIN.value
+        if clean in ("ADMIN", "ADMINISTRATOR"):
+            return cls.ADMIN.value
+        if clean in ("DEPARTMENT_ADMIN", "DEPT_ADMIN"):
+            return cls.DEPARTMENT_ADMIN.value
+        if clean in ("DEPARTMENT_CHECKER", "DEPT_CHECKER"):
+            return cls.DEPARTMENT_CHECKER.value
+        if clean in ("UPLOAD_CHECKER", "CHECKER"):
+            return cls.UPLOAD_CHECKER.value
+        if clean in ("DEPARTMENT_MAKER", "DEPT_MAKER"):
+            return cls.DEPARTMENT_MAKER.value
+        if clean in ("UPLOAD_MAKER", "MAKER", "USER"):
+            return cls.UPLOAD_MAKER.value
+        return None
 
     @classmethod
     def to_display_label(cls, role_str: str | None) -> str:
-        norm = cls.normalize(role_str)
-        if norm == cls.ADMIN.value:
-            return "Admin"
-        if norm == cls.UPLOAD_CHECKER.value:
-            return "Upload Checker"
-        return "Upload Maker"
+        if cls.is_super_admin(role_str):
+            return "Super Admin"
+        if cls.is_dept_admin(role_str):
+            return "Department Admin"
+        clean = (role_str or "").strip().upper().replace(" ", "_")
+        if clean in ("DEPARTMENT_CHECKER", "DEPT_CHECKER", "UPLOAD_CHECKER", "CHECKER"):
+            return "Department Checker"
+        return "Department Maker"
 
 
 # Legacy alias
@@ -77,7 +149,6 @@ class DocumentStatus(str, Enum):
         if not status_str:
             return cls.UPLOADED.value
         upper = status_str.strip().upper()
-        # Handle legacy status values
         if upper in ("COMPLETED", "PROCESSED", "INDEXED"):
             return cls.APPROVED.value
         if upper in ("NEEDS_REVIEW", "PENDING"):
@@ -117,7 +188,6 @@ DEPARTMENT_DOCUMENT_TYPES: dict[Department, list[str]] = {
     ],
 }
 
-# Reverse mapping: Document Type -> Department
 DOCUMENT_TYPE_TO_DEPARTMENT: dict[str, Department] = {
     doc_type: dept
     for dept, doc_types in DEPARTMENT_DOCUMENT_TYPES.items()
@@ -128,59 +198,50 @@ DOCUMENT_TYPE_TO_DEPARTMENT: dict[str, Department] = {
 def can_view_document(user: Any, document: Any) -> bool:
     """
     Check if a user has permission to view a document.
-    - ADMIN: all documents across all departments
-    - UPLOAD_MAKER: documents in their assigned department or documents uploaded by themselves
-    - UPLOAD_CHECKER: documents assigned to them or within their assigned department
+    - Super Admin: all documents across all departments
+    - Department Admin / Checker / Maker: strictly restricted to their assigned department
+    - Cross-department access is strictly forbidden (e.g. Finance users must NEVER access HR documents).
     """
-    if not user:
+    if not user or not document:
         return False
 
-    user_role = UserRole.normalize(getattr(user, "role", None))
-    if user_role == UserRole.ADMIN.value:
+    user_role = getattr(user, "role", None)
+    if UserRole.is_super_admin(user_role):
         return True
 
-    user_id = getattr(user, "id", None)
-    uploader_id = getattr(document, "uploaded_by", None)
     user_dept = getattr(user, "department", None)
-    doc_dept = getattr(document, "department", None)
-
-    # User's own document
-    if user_id is not None and uploader_id is not None and user_id == uploader_id:
-        return True
-
-    # Upload Maker: department match or unassigned document
-    if user_role == UserRole.UPLOAD_MAKER.value:
-        if user_dept and doc_dept:
-            return user_dept.strip().upper() == doc_dept.strip().upper()
-        return not doc_dept
-
-    # Upload Checker: documents assigned to them and within their permitted department
-    if user_role == UserRole.UPLOAD_CHECKER.value:
-        assigned_checker = getattr(document, "assigned_checker", None)
-        if assigned_checker == user_id:
-            if user_dept and doc_dept and user_dept.strip().upper() != doc_dept.strip().upper():
-                return False
-            return True
+    if not user_dept or not str(user_dept).strip():
+        # Non-Super Admin with no department cannot view department documents
         return False
 
-    return False
+    doc_dept = getattr(document, "department", None)
+    if not doc_dept or not str(doc_dept).strip():
+        # Unassigned document without department: only Super Admin can view
+        return False
 
+    # Strict department matching
+    return str(user_dept).strip().upper() == str(doc_dept).strip().upper()
 
 
 def can_review_document(user: Any, document: Any) -> tuple[bool, str | None]:
     """
     Check if a user is permitted to review/approve/reject a document.
-    Enforces separation of duties:
-    - User must be ADMIN or UPLOAD_CHECKER
-    - Must NOT be the document uploader (Separation of Duties!)
-    - If UPLOAD_CHECKER, must be assigned or within permitted department
+    Enforces separation of duties and department isolation:
+    - User must NOT be a Department Maker
+    - User must NOT be the document uploader (Separation of Duties!)
+    - Super Admin: all authorized departments
+    - Department Admin: own department
+    - Department Checker: own department only
     """
     if not user:
         return False, "Authentication required"
 
-    user_role = UserRole.normalize(getattr(user, "role", None))
-    if user_role not in (UserRole.ADMIN.value, UserRole.UPLOAD_CHECKER.value):
-        return False, "Only Upload Checkers and Admins can review documents"
+    user_role = getattr(user, "role", None)
+    if UserRole.is_strict_maker(user_role):
+        return False, "Department Makers cannot access the Review Queue or verify documents"
+
+    if not (UserRole.is_super_admin(user_role) or UserRole.is_dept_admin(user_role) or UserRole.is_checker(user_role)):
+        return False, "Review authority required"
 
     user_id = getattr(user, "id", None)
     uploader_id = getattr(document, "uploaded_by", None)
@@ -189,20 +250,27 @@ def can_review_document(user: Any, document: Any) -> tuple[bool, str | None]:
     if user_id is not None and uploader_id is not None and user_id == uploader_id:
         return False, "Separation of duties violation: You cannot approve or reject a document you uploaded."
 
-    # Admin has review authority across all documents (provided separation of duties is met)
-    if user_role == UserRole.ADMIN.value:
+    # Super Admin has review authority across all departments (provided separation of duties is met)
+    if UserRole.is_super_admin(user_role):
         return True, None
 
-    # For UPLOAD_CHECKER: Approval/rejection/revision requires document to be assigned to that checker
-    assigned_checker = getattr(document, "assigned_checker", None)
-    if assigned_checker is None or assigned_checker != user_id:
-        return False, "Review authority requires the document to be assigned to you"
-
-    # Also verify department access if departments are configured
+    # Department isolation for Department Admin and Department Checker
     user_dept = getattr(user, "department", None)
     doc_dept = getattr(document, "department", None)
-    if user_dept and doc_dept and user_dept.strip().upper() != doc_dept.strip().upper():
+
+    if not user_dept or not str(user_dept).strip():
+        return False, "User has no department assigned"
+
+    if not doc_dept or not str(doc_dept).strip():
+        return False, "Document has no department assigned"
+
+    if str(user_dept).strip().upper() != str(doc_dept).strip().upper():
         return False, "Document is outside your permitted department"
 
-    return True, None
+    # For checkers: if specifically assigned to another checker, enforce assignment
+    if not UserRole.is_dept_admin(user_role):
+        assigned_checker = getattr(document, "assigned_checker", None)
+        if assigned_checker is not None and assigned_checker != user_id:
+            return False, "Document is assigned to another checker"
 
+    return True, None

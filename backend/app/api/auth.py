@@ -1,13 +1,14 @@
 import logging
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.dependencies import get_current_user, require_admin
+from app.core.rbac import Department, UserRole
 from app.core.security import create_access_token
 from app.db.session import get_db
 from app.models.user import User
@@ -18,13 +19,12 @@ from app.schemas.auth import (
     TokenResponse,
     UserResponse,
 )
-from app.core.rbac import Department, UserRole
 from app.schemas.user import UserRoleAssignRequest, UserUpdateRequest
+from app.services.audit_service import log_activity
 from app.services.auth_service import (
     authenticate_user_credentials,
     upsert_google_user,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,12 @@ async def google_callback(
     if error or not code:
         err_msg = error or "Authorization cancelled or failed"
         logger.warning("Google OAuth error in callback: %s", err_msg)
+        log_activity(
+            action="LOGIN_FAILED",
+            status="FAILURE",
+            target_resource="auth:google_callback",
+            failure_reason=err_msg,
+        )
         return RedirectResponse(
             url=f"{frontend_url}/login?error={err_msg}"
         )
@@ -91,7 +97,6 @@ async def google_callback(
             url=f"{frontend_url}/login?error=Google%20OAuth%20is%20not%20configured%20on%20the%20server"
         )
 
-    # Exchange authorization code for tokens
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             token_response = await client.post(
@@ -103,48 +108,47 @@ async def google_callback(
                     "grant_type": "authorization_code",
                     "redirect_uri": settings.GOOGLE_REDIRECT_URI,
                 },
-                headers={"Accept": "application/json"},
             )
 
-            if token_response.status_code != 200:
-                logger.error(
-                    "Google token exchange failed: %s - %s",
-                    token_response.status_code,
-                    token_response.text,
-                )
-                return RedirectResponse(
-                    url=f"{frontend_url}/login?error=Failed%20to%20authenticate%20with%20Google"
-                )
+        if token_response.status_code != 200:
+            logger.error("Google token exchange failed: %s", token_response.text)
+            log_activity(
+                action="LOGIN_FAILED",
+                status="FAILURE",
+                target_resource="auth:google_callback",
+                failure_reason="Google token exchange failed",
+            )
+            return RedirectResponse(
+                url=f"{frontend_url}/login?error=Failed%20to%20authenticate%20with%20Google"
+            )
 
-            tokens = token_response.json()
-            access_token = tokens.get("access_token")
-            if not access_token:
-                logger.error("No access_token returned in Google response")
-                return RedirectResponse(
-                    url=f"{frontend_url}/login?error=Google%20did%20not%20return%20an%20access%20token"
-                )
+        google_tokens = token_response.json()
+        google_access_token = google_tokens.get("access_token")
 
-            # Retrieve user profile from Google
+        async with httpx.AsyncClient(timeout=15.0) as client:
             userinfo_response = await client.get(
                 GOOGLE_USERINFO_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers={"Authorization": f"Bearer {google_access_token}"},
             )
 
-            if userinfo_response.status_code != 200:
-                logger.error(
-                    "Google userinfo request failed: %s - %s",
-                    userinfo_response.status_code,
-                    userinfo_response.text,
-                )
-                return RedirectResponse(
-                    url=f"{frontend_url}/login?error=Failed%20to%20retrieve%20Google%20profile"
-                )
+        if userinfo_response.status_code != 200:
+            logger.error("Failed to fetch Google user info: %s", userinfo_response.text)
+            log_activity(
+                action="LOGIN_FAILED",
+                status="FAILURE",
+                target_resource="auth:google_callback",
+                failure_reason="Failed to retrieve Google user profile",
+            )
+            return RedirectResponse(
+                url=f"{frontend_url}/login?error=Failed%20to%20retrieve%20Google%20user%20profile"
+            )
 
-            google_user_info = userinfo_response.json()
+        google_user_info = userinfo_response.json()
+
     except Exception as e:
-        logger.exception("Error communicating with Google OAuth APIs: %s", e)
+        logger.exception("Unexpected error during Google OAuth flow: %s", e)
         return RedirectResponse(
-            url=f"{frontend_url}/login?error=Network%20error%20during%20Google%20login"
+            url=f"{frontend_url}/login?error=Authentication%20service%20error"
         )
 
     if not google_user_info.get("email_verified"):
@@ -152,7 +156,6 @@ async def google_callback(
             url=f"{frontend_url}/login?error=Google%20did%20not%20verify%20the%20account%20email"
         )
 
-    # Upsert user in database
     try:
         user = upsert_google_user(db, google_user_info)
     except Exception as e:
@@ -161,7 +164,6 @@ async def google_callback(
             url=f"{frontend_url}/login?error=Database%20error%20creating%20user%20session"
         )
 
-    # Create application JWT token
     jwt_token = create_access_token({
         "sub": str(user.id),
         "email": user.email,
@@ -169,7 +171,16 @@ async def google_callback(
         "name": user.name,
     })
 
-    # Redirect user to frontend callback page with the token
+    log_activity(
+        action="LOGIN_SUCCESS",
+        status="SUCCESS",
+        actor_id=user.id,
+        username=user.email,
+        department=user.department,
+        role=user.role,
+        target_resource="auth:google",
+    )
+
     return RedirectResponse(
         url=f"{frontend_url}/auth/callback?token={jwt_token}"
     )
@@ -182,23 +193,43 @@ async def google_callback(
 )
 async def admin_login(
     payload: AdminLoginRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Authenticate administrator using email and password."""
-    user = authenticate_user_credentials(db, payload.email, payload.password)
+    client_ip = request.client.host if request.client else None
+    user, err_reason = authenticate_user_credentials(db, payload.email, payload.password)
     if not user:
+        log_activity(
+            action="LOGIN_FAILED",
+            status="FAILURE",
+            username=payload.email,
+            failure_reason=err_reason or "Invalid email or password",
+            target_resource="auth:admin_login",
+            ip_address=client_ip,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            detail=err_reason or "Invalid email or password",
         )
 
     if not user.is_admin:
         logger.warning("Non-admin user %s attempted admin login.", payload.email)
+        log_activity(
+            action="LOGIN_FAILED",
+            status="FAILURE",
+            actor_id=user.id,
+            username=user.email,
+            department=user.department,
+            role=user.role,
+            failure_reason="Access denied: Administrator privileges required",
+            target_resource="auth:admin_login",
+            ip_address=client_ip,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: Administrator privileges required",
         )
-
 
     token = create_access_token({
         "sub": str(user.id),
@@ -206,6 +237,17 @@ async def admin_login(
         "role": user.role,
         "name": user.name,
     })
+
+    log_activity(
+        action="LOGIN_SUCCESS",
+        status="SUCCESS",
+        actor_id=user.id,
+        username=user.email,
+        department=user.department,
+        role=user.role,
+        target_resource="auth:admin_login",
+        ip_address=client_ip,
+    )
 
     return TokenResponse(
         access_token=token,
@@ -221,14 +263,24 @@ async def admin_login(
 )
 async def login_credentials(
     payload: AdminLoginRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """General login for users with email and password."""
-    user = authenticate_user_credentials(db, payload.email, payload.password)
+    client_ip = request.client.host if request.client else None
+    user, err_reason = authenticate_user_credentials(db, payload.email, payload.password)
     if not user:
+        log_activity(
+            action="LOGIN_FAILED",
+            status="FAILURE",
+            username=payload.email,
+            failure_reason=err_reason or "Invalid email or password",
+            target_resource="auth:login",
+            ip_address=client_ip,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            detail=err_reason or "Invalid email or password",
         )
 
     token = create_access_token({
@@ -237,6 +289,17 @@ async def login_credentials(
         "role": user.role,
         "name": user.name,
     })
+
+    log_activity(
+        action="LOGIN_SUCCESS",
+        status="SUCCESS",
+        actor_id=user.id,
+        username=user.email,
+        department=user.department,
+        role=user.role,
+        target_resource="auth:login",
+        ip_address=client_ip,
+    )
 
     return TokenResponse(
         access_token=token,
@@ -254,6 +317,15 @@ async def logout(
     current_user: User = Depends(get_current_user),
 ):
     """Logout current user session."""
+    log_activity(
+        action="LOGOUT",
+        status="SUCCESS",
+        actor_id=current_user.id,
+        username=current_user.email,
+        department=current_user.department,
+        role=current_user.role,
+        target_resource="auth:logout",
+    )
     return MessageResponse(message="Logged out successfully")
 
 
@@ -269,6 +341,22 @@ async def get_current_user_profile(
     return UserResponse.model_validate(current_user)
 
 
+from app.api.admin import (
+    create_workflow_rule,
+    delete_user,
+    get_permissions,
+    get_workflow,
+    invite_user,
+    list_users,
+    remove_workflow_rule,
+    router as admin_router,
+    update_permissions,
+    update_user,
+    update_user_role,
+    update_workflow,
+)
+
+# Route aliases under /api/auth/admin to ensure full compatibility
 @router.get(
     "/admin/users",
     response_model=list[UserResponse],
@@ -278,13 +366,10 @@ async def list_users_admin(
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """List all registered users. Restricted to admin role."""
-    users = db.query(User).order_by(User.id.asc()).all()
-    return [UserResponse.model_validate(u) for u in users]
+    return await list_users(department=None, current_user=current_user, db=db)
 
 
 @router.patch(
-
     "/admin/users/{user_id}",
     response_model=UserResponse,
     summary="Admin only: Update a user's role, department, or active status",
@@ -295,58 +380,7 @@ async def update_user_admin(
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    target_user = db.query(User).filter(User.id == user_id).first()
-    if not target_user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User with ID {user_id} not found",
-        )
-
-    # Prevent admin from changing their own role (prevent lockout)
-    if payload.role is not None and current_user.id == target_user.id:
-        normalized_requested = UserRole.normalize(payload.role)
-        if normalized_requested != UserRole.ADMIN.value:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Administrators cannot demote their own account role",
-            )
-
-    if payload.role is not None:
-        normalized_role = UserRole.parse_assignment(payload.role)
-        if normalized_role is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid role '{payload.role}'. Must be one of: {', '.join(valid_roles)}",
-            )
-        target_user.role = normalized_role
-
-    if payload.department is not None:
-        if payload.department.strip() == "":
-            target_user.department = None
-        else:
-            normalized_dept = Department.normalize(payload.department)
-            valid_depts = [d.value for d in Department]
-            if normalized_dept not in valid_depts:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid department '{payload.department}'. Must be one of: {', '.join(valid_depts)}",
-                )
-            target_user.department = normalized_dept
-
-    if payload.is_active is not None:
-        if current_user.id == target_user.id and not payload.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Administrators cannot deactivate their own account",
-            )
-        target_user.is_active = payload.is_active
-
-    if payload.name is not None and payload.name.strip():
-        target_user.name = payload.name.strip()
-
-    db.commit()
-    db.refresh(target_user)
-    return UserResponse.model_validate(target_user)
+    return await update_user(user_id=user_id, payload=payload, current_user=current_user, db=db)
 
 
 @router.patch(
@@ -360,7 +394,7 @@ async def update_user_role_admin(
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    return await update_user_admin(
+    return await update_user(
         user_id=user_id,
         payload=UserUpdateRequest(role=payload.role),
         current_user=current_user,
@@ -368,19 +402,6 @@ async def update_user_role_admin(
     )
 
 
-from app.api.admin import (
-    create_workflow_rule,
-    delete_user,
-    get_permissions,
-    get_workflow,
-    invite_user,
-    remove_workflow_rule,
-    router as admin_router,
-    update_permissions,
-    update_workflow,
-)
-
-# Register admin routes under /api/auth/admin as well for full compatibility
 router.add_api_route(
     "/admin/users/invite",
     invite_user,
@@ -395,7 +416,7 @@ router.add_api_route(
     delete_user,
     methods=["DELETE"],
     response_model=MessageResponse,
-    summary="Admin only: Deactivate a member",
+    summary="Admin only: Deactivate/delete a member",
 )
 
 router.add_api_route(
@@ -439,5 +460,3 @@ router.add_api_route(
     methods=["DELETE"],
     summary="Admin only: Remove workflow rule",
 )
-
-

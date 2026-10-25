@@ -28,7 +28,7 @@ import type {
 	DocumentQuery,
 	DocumentRecord,
 } from "../api/document";
-import { searchDocuments, searchSemantic } from "../api/search";
+import { searchDocuments } from "../api/search";
 import { useAuth } from "../context/AuthContext";
 import {
 	CONFIDENCE_EXPLANATIONS,
@@ -42,7 +42,6 @@ import {
 } from "../components/tables/StructuredTables";
 
 type DocumentItem = DocumentRecord;
-type SearchMode = "keyword" | "semantic";
 
 type DisplayType =
 	| "PDF"
@@ -141,12 +140,11 @@ const ocrPageLabel = (
 };
 
 const Library = () => {
-	const { canReview } = useAuth();
+	const { canReview, isSuperAdmin } = useAuth();
 	const [searchParams, setSearchParams] = useSearchParams();
 	const navigate = useNavigate();
 	const [search, setSearch] = useState(searchParams.get("q") || "");
 	const [debouncedSearch, setDebouncedSearch] = useState(search.trim());
-	const [searchMode, setSearchMode] = useState<SearchMode>("keyword");
 	const [typeFilter, setTypeFilter] = useState("All types");
 	const [statusFilter, setStatusFilter] = useState("All status");
 	const [departmentFilter, setDepartmentFilter] = useState("All departments");
@@ -156,7 +154,7 @@ const Library = () => {
 	const [hits, setHits] = useState<SearchResultHit[]>([]);
 	const [total, setTotal] = useState(0);
 	const [page, setPage] = useState(1);
-	const listKey = `${debouncedSearch}|${searchMode}|${typeFilter}|${statusFilter}|${departmentFilter}`;
+	const listKey = `${debouncedSearch}|${typeFilter}|${statusFilter}|${departmentFilter}`;
 	const [listKeySeen, setListKeySeen] = useState(listKey);
 	if (listKey !== listKeySeen) {
 		setListKeySeen(listKey);
@@ -336,35 +334,9 @@ const Library = () => {
 		setSearchLoading(showingSearch);
 		setError("");
 
-		if (showingSearch && searchMode === "semantic") {
-			searchSemantic(debouncedSearch, 10, 0.3, signal)
-				.then((response) => {
-					setHits(
-						response.data.items.map((hit) => ({
-							...hit,
-							page_number: hit.page_number,
-						}))
-					);
-					setTotal(response.data.total);
-					setDocuments([]);
-				})
-				.catch((error) => {
-					if (!isRequestCanceled(error)) {
-						setError("Unable to run semantic search.");
-					}
-				})
-				.finally(() => {
-					if (!signal.aborted) {
-						setLoading(false);
-						setSearchLoading(false);
-					}
-				});
-			return () => controller.abort();
-		}
-
-		if (showingSearch && searchMode === "keyword") {
+		if (showingSearch) {
 			searchDocuments(debouncedSearch, (page - 1) * pageSize, pageSize, {
-				mode: "keyword",
+				mode: "hybrid",
 				signal,
 			})
 				.then((response) => {
@@ -416,7 +388,6 @@ const Library = () => {
 		statusFilter,
 		departmentFilter,
 		page,
-		searchMode,
 		showingSearch,
 	]);
 
@@ -617,56 +588,73 @@ const Library = () => {
 
 			<div className="libraryToolbar">
 				<div className="librarySearchCluster">
-					<div className="searchModeToggle" role="tablist">
-						<button
-							type="button"
-							className={searchMode === "keyword" ? "active" : ""}
-							onClick={() => setSearchMode("keyword")}
-						>
-							Keyword
-						</button>
-						<button
-							type="button"
-							className={searchMode === "semantic" ? "active" : ""}
-							onClick={() => setSearchMode("semantic")}
-						>
-							Semantic
-						</button>
-					</div>
-					<div className="librarySearch">
-						<SearchIcon />
+					<div className="librarySearch" style={{ flex: 1, position: "relative" }}>
+						<SearchIcon
+							style={{ cursor: "pointer" }}
+							onClick={() => setDebouncedSearch(search.trim())}
+							titleAccess="Search documents"
+						/>
 						<input
 							type="text"
-							placeholder={
-								searchMode === "semantic"
-									? "Search by meaning..."
-									: "Search documents..."
-							}
+							placeholder="Search documents by keyword or meaning (Press Enter)..."
 							value={search}
-							aria-label={searchMode === "semantic" ? "Search documents by meaning" : "Search documents by keyword"}
+							aria-label="Search documents"
 							onChange={(event) => updateSearch(event.target.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									setDebouncedSearch(search.trim());
+								}
+							}}
 						/>
+						{search.trim().length > 0 && (
+							<button
+								type="button"
+								onClick={() => {
+									updateSearch("");
+									setDebouncedSearch("");
+								}}
+								style={{
+									position: "absolute",
+									right: "12px",
+									top: "50%",
+									transform: "translateY(-50%)",
+									border: "none",
+									background: "transparent",
+									cursor: "pointer",
+									color: "var(--text-secondary)",
+									display: "flex",
+									alignItems: "center",
+									padding: "4px",
+								}}
+								title="Clear search"
+								aria-label="Clear search"
+							>
+								<CloseIcon style={{ fontSize: 16 }} />
+							</button>
+						)}
 					</div>
 				</div>
 
 				<div className="filterGroup">
-					<div className="filterSelect">
-						<FilterListIcon />
-						<select
-							value={departmentFilter}
-							aria-label="Filter by department"
-							onChange={(event) => setDepartmentFilter(event.target.value)}
-							disabled={showingSearch}
-						>
-							<option>All departments</option>
-							<option value="HR">HR</option>
-							<option value="FINANCE">Finance</option>
-							<option value="LEGAL">Legal</option>
-							<option value="OPERATIONS">Operations</option>
-							<option value="IT">IT</option>
-						</select>
-						<KeyboardArrowDownIcon />
-					</div>
+					{isSuperAdmin && (
+						<div className="filterSelect">
+							<FilterListIcon />
+							<select
+								value={departmentFilter}
+								aria-label="Filter by department"
+								onChange={(event) => setDepartmentFilter(event.target.value)}
+								disabled={showingSearch}
+							>
+								<option>All departments</option>
+								<option value="HR">HR</option>
+								<option value="FINANCE">Finance</option>
+								<option value="LEGAL">Legal</option>
+								<option value="OPERATIONS">Operations</option>
+								<option value="IT">IT</option>
+							</select>
+							<KeyboardArrowDownIcon />
+						</div>
+					)}
 					<div className="filterSelect">
 						<select
 							value={typeFilter}
@@ -708,9 +696,7 @@ const Library = () => {
 					emptyMessage={
 						error
 							? error
-							: searchMode === "semantic"
-								? "No documents passed the relevance threshold (0.30). Try another phrasing, switch to keyword search for exact names or numbers, or wait until documents are indexed."
-								: "No keyword match. Try a different word or check spelling."
+							: "No matching documents found. Try a different query or wait until documents are indexed."
 					}
 					onOpenDocument={openDocumentById}
 				/>

@@ -128,3 +128,35 @@ export const CheckerRoute: React.FC<{ children: React.ReactElement }> = ({ child
 	return children;
 };
 
+
+export const SuperAdminRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
+	const { isAuthenticated, isSuperAdmin, isLoading } = useAuth();
+	const location = useLocation();
+
+	if (isLoading) {
+		return (
+			<Box
+				sx={{
+					width: "100vw",
+					height: "100vh",
+					display: "flex",
+					alignItems: "center",
+					justifyContent: "center",
+					background: "var(--bg, #0f1015)",
+				}}
+			>
+				<CircularProgress size={40} sx={{ color: "var(--accent, #a855f7)" }} />
+			</Box>
+		);
+	}
+
+	if (!isAuthenticated) {
+		return <Navigate to="/login" state={{ from: location }} replace />;
+	}
+
+	if (!isSuperAdmin) {
+		return <Navigate to="/dashboard" replace />;
+	}
+
+	return children;
+};

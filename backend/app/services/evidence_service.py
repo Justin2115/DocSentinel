@@ -1600,6 +1600,15 @@ def collect_evidence(
     document_query = db.query(Document)
     if scope_ids:
         document_query = document_query.filter(Document.id.in_(scope_ids))
+    elif user is not None:
+        from sqlalchemy import func
+        from app.core.rbac import UserRole
+        if not UserRole.is_super_admin(getattr(user, "role", None)):
+            user_dept = (getattr(user, "department", None) or "").strip().upper()
+            if user_dept:
+                document_query = document_query.filter(func.upper(Document.department) == user_dept)
+            else:
+                document_query = document_query.filter(Document.id == -1)
     documents = {document.id: document for document in document_query.all()}
     diagnostics["documents_in_scope"] = len(documents)
 
@@ -1633,6 +1642,41 @@ def collect_evidence(
             )
         )
         diagnostics["pages_scanned"] += 1
+
+    if documents:
+        from app.models.document import ExtractedField
+        field_rows = (
+            db.query(ExtractedField, DocumentPage)
+            .outerjoin(DocumentPage, DocumentPage.id == ExtractedField.page_id)
+            .filter(ExtractedField.document_id.in_(list(documents)))
+            .all()
+        )
+        for field, page in field_rows:
+            document = documents.get(field.document_id)
+            if document is None:
+                continue
+            if user is not None and not is_document_viewable(db, document, user):
+                continue
+            val = (field.corrected_value or field.field_value or field.original_value or "").strip()
+            if not val:
+                continue
+            page_num = int(page.page_number) if page is not None else 1
+            f_text = f"{field.field_name}: {val}"
+            f_values = extract_values(val) or extract_values(f_text)
+            units.append(
+                EvidenceUnit(
+                    document_id=document.id,
+                    document_name=document.original_filename,
+                    page_number=page_num,
+                    chunk_index=0,
+                    text=f_text,
+                    lines=(f_text,),
+                    values=f_values,
+                    source_kind="line_window",
+                    anchored=document.id in anchored_set or bool(scope_ids),
+                    semantic_raw=semantic_by_page.get((document.id, page_num), 0.0),
+                )
+            )
 
     if not units:
         diagnostics["retrieval_empty"] = True

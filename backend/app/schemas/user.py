@@ -9,19 +9,19 @@ class UserUpdateRequest(BaseModel):
     role: Optional[str] = None
     department: Optional[str] = None
     is_active: Optional[bool] = None
+    password: Optional[str] = None
 
 
 class UserInviteRequest(BaseModel):
     name: str
     email: str
-    role: str = "UPLOAD_MAKER"
+    role: str = "DEPARTMENT_MAKER"
     department: Optional[str] = None
     password: Optional[str] = None
 
 
 class UserRoleAssignRequest(BaseModel):
     role: str
-
 
 
 class UserDepartmentAssignRequest(BaseModel):
@@ -38,5 +38,7 @@ class UserDetailResponse(BaseModel):
     department: Optional[str] = None
     profile_picture: Optional[str] = None
     is_active: bool = True
+    has_password: bool = False
+    google_linked: bool = False
     created_at: Optional[datetime] = None
     last_login: Optional[datetime] = None

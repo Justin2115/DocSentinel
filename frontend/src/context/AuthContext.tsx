@@ -14,10 +14,15 @@ interface AuthContextType {
 	token: string | null;
 	isAuthenticated: boolean;
 	isAdmin: boolean;
+	isSuperAdmin: boolean;
+	isDeptAdmin: boolean;
+	isChecker: boolean;
+	isMaker: boolean;
 	isUploadMaker: boolean;
 	isUploadChecker: boolean;
 	canUpload: boolean;
 	canReview: boolean;
+	canReviewQueue: boolean;
 	department: string | null;
 	isLoading: boolean;
 	login: (token: string, userData?: User) => Promise<void>;
@@ -67,6 +72,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 	}, [refreshUser]);
 
 	const login = useCallback(async (newToken: string, userData?: User) => {
+		try { sessionStorage.clear(); } catch (_) {}
 		localStorage.setItem("auth_token", newToken);
 		setToken(newToken);
 		if (userData) {
@@ -89,6 +95,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 		try {
 			logoutUser().catch(() => {});
 		} catch (_) {}
+		try { sessionStorage.clear(); } catch (_) {}
 		localStorage.removeItem("auth_token");
 		localStorage.removeItem("profile");
 		setToken(null);
@@ -96,12 +103,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 	}, []);
 
 	const isAuthenticated = Boolean(token && user);
-	const normalizedRole = user?.role ? user.role.toUpperCase() : "";
-	const isAdmin = Boolean(user && (normalizedRole === "ADMIN" || user.role === "admin"));
-	const isUploadMaker = Boolean(isAdmin || normalizedRole === "UPLOAD_MAKER" || user?.role === "user");
-	const isUploadChecker = Boolean(isAdmin || normalizedRole === "UPLOAD_CHECKER");
-	const canUpload = isAdmin || isUploadMaker;
-	const canReview = isAdmin || isUploadChecker;
+	const normalizedRole = user?.role ? user.role.toUpperCase().replace(/\s+/g, "_") : "";
+	const isSuperAdmin = Boolean(user && (normalizedRole === "SUPER_ADMIN" || normalizedRole === "ADMIN" || user.role === "admin"));
+	const isDeptAdmin = Boolean(user && (normalizedRole === "DEPARTMENT_ADMIN" || normalizedRole === "DEPT_ADMIN"));
+	const isAdmin = isSuperAdmin || isDeptAdmin;
+	const isChecker = Boolean(user && (normalizedRole === "DEPARTMENT_CHECKER" || normalizedRole === "UPLOAD_CHECKER" || normalizedRole === "CHECKER"));
+	const isMaker = Boolean(user && (normalizedRole === "DEPARTMENT_MAKER" || normalizedRole === "UPLOAD_MAKER" || normalizedRole === "MAKER" || user?.role === "user"));
+	const canReviewQueue = isSuperAdmin || isDeptAdmin || isChecker;
+	const canReview = canReviewQueue;
+	const canUpload = isSuperAdmin || isDeptAdmin || isMaker;
+	const isUploadMaker = isMaker || isAdmin;
+	const isUploadChecker = isChecker || isAdmin;
 	const department = user?.department || null;
 
 	const contextValue = useMemo(
@@ -110,10 +122,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 			token,
 			isAuthenticated,
 			isAdmin,
+			isSuperAdmin,
+			isDeptAdmin,
+			isChecker,
+			isMaker,
 			isUploadMaker,
 			isUploadChecker,
 			canUpload,
 			canReview,
+			canReviewQueue,
 			department,
 			isLoading,
 			login,
@@ -125,10 +142,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 			token,
 			isAuthenticated,
 			isAdmin,
+			isSuperAdmin,
+			isDeptAdmin,
+			isChecker,
+			isMaker,
 			isUploadMaker,
 			isUploadChecker,
 			canUpload,
 			canReview,
+			canReviewQueue,
 			department,
 			isLoading,
 			login,

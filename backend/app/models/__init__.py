@@ -1,3 +1,4 @@
+from app.models.audit import ActivityLog
 from app.models.document import (
     Document,
     DocumentPage,
@@ -11,6 +12,7 @@ from app.models.user import User
 from app.models.workflow import WorkflowRule, WorkflowSetting
 
 __all__ = [
+    "ActivityLog",
     "Document",
     "DocumentPage",
     "OCRResult",
@@ -22,4 +24,3 @@ __all__ = [
     "WorkflowSetting",
     "WorkflowRule",
 ]
-

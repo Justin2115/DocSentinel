@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import CheckCircleOutlineOutlinedIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
 import ErrorOutlineOutlinedIcon from "@mui/icons-material/ErrorOutlineOutlined";
-import TrendingUpOutlinedIcon from "@mui/icons-material/TrendingUpOutlined";
 
 import StatsCard from "./StatsCard";
 import { getDashboardStats } from "../../api/document";
@@ -20,29 +19,22 @@ export default function StatsGrid() {
       <StatsCard
         title="TOTAL DOCUMENTS"
         value={stats ? stats.total_documents.toLocaleString() : "--"}
-        change="From PostgreSQL"
+        change="Role-scoped library count"
         icon={<DescriptionOutlinedIcon />}
       />
 
       <StatsCard
         title="PROCESSED TODAY"
         value={stats ? stats.processed_today.toLocaleString() : "--"}
-        change="Processed today"
+        change="Completed processing"
         icon={<CheckCircleOutlineOutlinedIcon />}
       />
 
       <StatsCard
         title="PENDING REVIEW"
         value={stats ? stats.pending_review.toLocaleString() : "--"}
-        change="Needs review"
+        change="Awaiting checker verification"
         icon={<ErrorOutlineOutlinedIcon />}
-      />
-
-      <StatsCard
-        title="AVG. CONFIDENCE"
-        value={stats?.average_confidence != null ? `${stats.average_confidence.toFixed(1)}%` : "--"}
-        change="Available OCR confidence"
-        icon={<TrendingUpOutlinedIcon />}
       />
 
     </div>

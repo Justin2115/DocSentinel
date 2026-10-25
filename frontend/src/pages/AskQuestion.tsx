@@ -15,6 +15,7 @@ import {
 } from "../api/query";
 import type { SourceCitation } from "../api/query";
 import { getAllDocuments } from "../api/document";
+import { useAuth } from "../context/AuthContext";
 import type { DocumentRecord } from "../api/document";
 import { isRequestCanceled, requestStatus } from "../api/client";
 
@@ -139,7 +140,8 @@ type Conversation = {
 // unmounts on every navigation, and a module variable outlives that. sessionStorage
 // mirrors it for a page refresh, and both are dropped when the tab closes, so no
 // chat text is ever written to the database.
-const CHAT_STORAGE_KEY = "docsentinel.chat.v1";
+const getChatStorageKey = (userId?: number | null) =>
+	userId ? `docsentinel.chat.v1.user_${userId}` : "docsentinel.chat.v1.anon";
 
 const isMessage = (value: unknown): value is Message => {
 	const message = value as Partial<Message>;
@@ -151,9 +153,10 @@ const isMessage = (value: unknown): value is Message => {
 
 const emptyConversation = (): Conversation => ({ messages: [], scopeIds: [] });
 
-const readConversation = (): Conversation => {
+const readConversation = (userId?: number | null): Conversation => {
 	try {
-		const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
+		const key = getChatStorageKey(userId);
+		const raw = sessionStorage.getItem(key);
 		if (!raw) {
 			return emptyConversation();
 		}
@@ -170,15 +173,16 @@ const readConversation = (): Conversation => {
 	}
 };
 
-let conversation: Conversation = readConversation();
+let cachedUserId: number | null | undefined = undefined;
+let conversation: Conversation = emptyConversation();
 
-const persistConversation = (next: Conversation) => {
+const persistConversation = (next: Conversation, userId?: number | null) => {
 	conversation = next;
+	cachedUserId = userId;
 	try {
-		sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(next));
+		const key = getChatStorageKey(userId);
+		sessionStorage.setItem(key, JSON.stringify(next));
 	} catch {
-		// A full or blocked sessionStorage costs the refresh restore only; the
-		// module store above still carries the conversation across views.
 	}
 };
 
@@ -207,22 +211,45 @@ const fileTypeLabel = (document: DocumentRecord) => {
 };
 
 const AskQuestion = () => {
+	const { user: currentUser } = useAuth();
+	const currentUserId = currentUser?.id ?? null;
+	const prevUserRef = useRef<number | null>(currentUserId);
 	const [searchParams] = useSearchParams();
 	const navigate = useNavigate();
 	const [question, setQuestion] = useState("");
-	// Both come from the module store, so switching views keeps the conversation
-	// and the document it is scoped to, and a refresh restores them.
-	const [messages, setMessages] = useState<Message[]>(
-		() => conversation.messages
-	);
+
+	const [messages, setMessages] = useState<Message[]>(() => {
+		if (cachedUserId !== currentUserId) {
+			conversation = readConversation(currentUserId);
+			cachedUserId = currentUserId;
+		}
+		return conversation.messages;
+	});
 	const [isSearching, setIsSearching] = useState(false);
 	const processedQuery = useRef<string | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
 	const composerRef = useRef<HTMLInputElement | null>(null);
 	const [pickerOpen, setPickerOpen] = useState(false);
-	const [scopeIds, setScopeIds] = useState<number[]>(
-		() => conversation.scopeIds
-	);
+	const [scopeIds, setScopeIds] = useState<number[]>(() => {
+		if (cachedUserId !== currentUserId) {
+			conversation = readConversation(currentUserId);
+			cachedUserId = currentUserId;
+		}
+		return conversation.scopeIds;
+	});
+
+	// Reset state immediately if authenticated user switches
+	useEffect(() => {
+		if (prevUserRef.current !== currentUserId) {
+			prevUserRef.current = currentUserId;
+			const userConvo = readConversation(currentUserId);
+			conversation = userConvo;
+			cachedUserId = currentUserId;
+			setMessages(userConvo.messages);
+			setScopeIds(userConvo.scopeIds);
+			setQuestion("");
+		}
+	}, [currentUserId]);
 	const [docSearch, setDocSearch] = useState("");
 	const [documents, setDocuments] = useState<DocumentRecord[]>([]);
 	const [docsStatus, setDocsStatus] = useState<
@@ -289,7 +316,7 @@ const AskQuestion = () => {
 	// Written on every change: switching views keeps the turns and their scope in
 	// the module store, and a refresh reads them back from sessionStorage.
 	useEffect(() => {
-		persistConversation({ messages, scopeIds });
+		persistConversation({ messages, scopeIds }, currentUserId);
 	}, [messages, scopeIds]);
 
 	const filteredDocuments = useMemo(() => {
@@ -399,7 +426,7 @@ const AskQuestion = () => {
 	// way it is cleared - and it also releases the document scope.
 	const newConversation = () => {
 		abortRef.current?.abort();
-		persistConversation(emptyConversation());
+		persistConversation(emptyConversation(), currentUserId);
 		setMessages([]);
 		setScopeIds([]);
 		composerRef.current?.focus();
@@ -424,12 +451,23 @@ const AskQuestion = () => {
 
 	return (
 		<div className="askQuestionPage">
-			<div className="askQuestionHeader">
-				<div>
-					<h1>Ask a Question</h1>
-					<p>
-						Search across your documents using meaning, not just keywords.
-					</p>
+			<div className="askQuestionHeader" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+				<div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+					<span style={{ fontSize: "0.95rem", color: "#64748b", fontWeight: 500 }}>
+						Document Intelligence Chat
+					</span>
+					{scopeIds.length > 0 && (
+						<span style={{
+							fontSize: "0.75rem",
+							padding: "3px 10px",
+							borderRadius: "12px",
+							background: "rgba(16, 185, 129, 0.12)",
+							color: "#10b981",
+							fontWeight: 600,
+						}}>
+							{scopeIds.length} Document{scopeIds.length > 1 ? "s" : ""} Attached to Context
+						</span>
+					)}
 				</div>
 				<button
 					type="button"
@@ -724,11 +762,19 @@ const AskQuestion = () => {
 								<div
 									className="attachmentCard"
 									key={document.id}
-									title={`${document.original_filename} - only these answers this conversation`}
+									title={`${document.original_filename} - OCR text, extracted fields and indexed embeddings contribute to RAG`}
 								>
 									<DescriptionOutlinedIcon />
 									<span className="attachmentName">{document.original_filename}</span>
 									<span className="attachmentType">{fileTypeLabel(document)}</span>
+									{document.department && (
+										<span
+											className="attachmentType"
+											style={{ background: "rgba(59, 130, 246, 0.1)", color: "#2563eb", borderColor: "rgba(59, 130, 246, 0.2)" }}
+										>
+											{document.department}
+										</span>
+									)}
 									<span className="attachmentStatus">{statusLabel(document.status)}</span>
 									<button
 										type="button"

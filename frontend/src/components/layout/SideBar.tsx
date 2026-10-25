@@ -24,6 +24,8 @@ export default function SideBar() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
+    document.body.classList.toggle("dark-mode", darkMode);
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
     localStorage.setItem("theme", darkMode ? "dark" : "light");
   }, [darkMode]);
 

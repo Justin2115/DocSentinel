@@ -10,7 +10,7 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "role IN ('ADMIN', 'UPLOAD_MAKER', 'UPLOAD_CHECKER')",
+            "role IN ('SUPER_ADMIN', 'DEPARTMENT_ADMIN', 'DEPARTMENT_CHECKER', 'DEPARTMENT_MAKER', 'ADMIN', 'UPLOAD_MAKER', 'UPLOAD_CHECKER')",
             name="ck_users_supported_role",
         ),
     )
@@ -46,8 +46,8 @@ class User(Base):
     )
     role: Mapped[str] = mapped_column(
         String(50),
-        default="UPLOAD_MAKER",
-        server_default="UPLOAD_MAKER",
+        default="DEPARTMENT_MAKER",
+        server_default="DEPARTMENT_MAKER",
         nullable=False,
     )
     department: Mapped[str | None] = mapped_column(
@@ -71,17 +71,55 @@ class User(Base):
     )
 
     @property
-    def is_admin(self) -> bool:
+    def is_super_admin(self) -> bool:
         from app.core.rbac import UserRole
-        return UserRole.normalize(self.role) == UserRole.ADMIN.value
+        norm = UserRole.normalize(self.role)
+        return norm in (UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value)
+
+    @property
+    def is_dept_admin(self) -> bool:
+        from app.core.rbac import UserRole
+        norm = UserRole.normalize(self.role)
+        return norm == UserRole.DEPARTMENT_ADMIN.value
+
+    @property
+    def is_admin(self) -> bool:
+        return self.is_super_admin or self.is_dept_admin
 
     @property
     def is_maker(self) -> bool:
         from app.core.rbac import UserRole
-        return UserRole.normalize(self.role) in (UserRole.UPLOAD_MAKER.value, UserRole.ADMIN.value)
+        norm = UserRole.normalize(self.role)
+        return norm in (
+            UserRole.DEPARTMENT_MAKER.value,
+            UserRole.UPLOAD_MAKER.value,
+            UserRole.SUPER_ADMIN.value,
+            UserRole.ADMIN.value,
+            UserRole.DEPARTMENT_ADMIN.value,
+        )
 
     @property
     def is_checker(self) -> bool:
         from app.core.rbac import UserRole
-        return UserRole.normalize(self.role) in (UserRole.UPLOAD_CHECKER.value, UserRole.ADMIN.value)
+        norm = UserRole.normalize(self.role)
+        return norm in (
+            UserRole.DEPARTMENT_CHECKER.value,
+            UserRole.UPLOAD_CHECKER.value,
+            UserRole.SUPER_ADMIN.value,
+            UserRole.ADMIN.value,
+            UserRole.DEPARTMENT_ADMIN.value,
+        )
 
+    @property
+    def is_strict_maker(self) -> bool:
+        from app.core.rbac import UserRole
+        norm = UserRole.normalize(self.role)
+        return norm in (UserRole.DEPARTMENT_MAKER.value, UserRole.UPLOAD_MAKER.value)
+
+    @property
+    def has_password(self) -> bool:
+        return bool(self.password_hash and self.password_hash.strip())
+
+    @property
+    def google_linked(self) -> bool:
+        return bool(self.google_id and self.google_id.strip())

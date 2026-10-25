@@ -86,7 +86,7 @@ def _answer_application_metadata_question(
     catalog answer reads the document table instead of the evidence pool, so it
     has to apply that scope itself or it names documents the question excluded.
     """
-    from sqlalchemy import or_
+    from sqlalchemy import func, or_
     from app.core.rbac import UserRole
     from app.models.document import Document
 
@@ -94,23 +94,13 @@ def _answer_application_metadata_question(
     if allowed_ids:
         query = query.filter(Document.id.in_([int(value) for value in allowed_ids]))
     if user is not None:
-        role = UserRole.normalize(user.role)
-        if role == UserRole.UPLOAD_MAKER.value:
-            maker_dept = (user.department or "").strip()
-            if maker_dept:
-                query = query.filter(
-                    or_(
-                        Document.department.ilike(f"%{maker_dept}%"),
-                        Document.uploaded_by == user.id,
-                    )
-                )
+        from app.core.rbac import UserRole
+        if not UserRole.is_super_admin(getattr(user, "role", None)):
+            user_dept = (getattr(user, "department", None) or "").strip().upper()
+            if user_dept:
+                query = query.filter(func.upper(Document.department) == user_dept)
             else:
-                query = query.filter(Document.uploaded_by == user.id)
-        elif role == UserRole.UPLOAD_CHECKER.value:
-            checker_dept = (user.department or "").strip()
-            query = query.filter(Document.assigned_checker == user.id)
-            if checker_dept:
-                query = query.filter(Document.department.ilike(f"%{checker_dept}%"))
+                query = query.filter(Document.id == -1)
 
     docs = query.order_by(Document.uploaded_at.desc()).all()
     total_count = len(docs)
@@ -1081,7 +1071,19 @@ def answer_question(
     if request.document_id is not None:
         requested_ids.append(int(request.document_id))
 
-    allowed, _rejected = ev.scope_document_ids(db, user, requested_ids or None)
+    allowed, rejected = ev.scope_document_ids(db, user, requested_ids or None)
+    if requested_ids and rejected:
+        return ChatQueryResponse(
+            answer=(
+                "Access to one or more requested documents is not authorized for your department. "
+                "Cross-department document access is forbidden."
+            ),
+            sources=[],
+            confidence=0.0,
+            question=clean_q,
+            has_evidence=False,
+            engine="unauthorized",
+        )
     if requested_ids and not allowed:
         return ChatQueryResponse(
             answer=(

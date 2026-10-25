@@ -104,6 +104,19 @@ async def upload_document(
             ),
         )
 
+    # Enforce department isolation on upload:
+    # Super Admin can select a department or leave auto/unassigned.
+    # Non-Super Admin (Dept Admin, Maker) is strictly bound to their authenticated department.
+    if not current_user.is_super_admin:
+        if current_user.department and current_user.department.strip():
+            department = current_user.department
+        else:
+            department = None
+    elif department and department.strip() and department.upper() != "AUTO":
+        department = Department.normalize(department)
+    else:
+        department = None
+
     # Check upload folder permissions before processing if folder/type requested
     from app.services.admin_service import check_folder_permission, evaluate_document_routing
     folder_check_target = document_type or department
@@ -134,6 +147,7 @@ async def upload_document(
             file_path=str(Path("uploads") / stored_filename),
             file_type=content_type,
             file_size=file_size,
+            department=department,
             uploaded_by=current_user.id,
             status=DocumentStatus.PROCESSING.value,
         )
@@ -141,6 +155,18 @@ async def upload_document(
         db.add(document)
         db.commit()
         db.refresh(document)
+
+        from app.services.audit_service import log_activity
+        log_activity(
+            action="DOCUMENT_UPLOAD",
+            status="SUCCESS",
+            actor_id=current_user.id,
+            username=current_user.email,
+            department=department,
+            role=current_user.role,
+            target_resource=f"document:{document.id}",
+            details={"original_filename": original_filename, "file_size": file_size},
+        )
 
         background_tasks.add_task(
             process_document_task,
@@ -569,14 +595,24 @@ def process_document_task(
         # Department Categorization, Routing & Review Queue
         # ------------------------------------------------
 
+        uploader = None
         uploader_department = None
+        uploader_is_super_admin = False
         if user_id is not None:
             uploader = db.query(User).filter(User.id == user_id).first()
-            uploader_department = uploader.department if uploader else None
+            if uploader:
+                uploader_is_super_admin = bool(uploader.is_super_admin)
+                uploader_department = uploader.department
 
         from app.services.admin_service import evaluate_document_routing
 
-        raw_dept = department or report.department or uploader_department or "Operations"
+        # Non-Super Admin: strictly locked to their authenticated department.
+        # AI classification cannot override a non-Super Admin's department.
+        # Super Admin: if department explicitly chosen, use it; otherwise allow AI classification.
+        if uploader and not uploader_is_super_admin and uploader_department:
+            raw_dept = uploader_department
+        else:
+            raw_dept = department or report.department or uploader_department or "Operations"
         resolved_dept = Department.normalize(raw_dept) or raw_dept
         resolved_doc_type = document_type or report.document_type or "General Document"
 
@@ -644,6 +680,15 @@ def process_document_task(
         )
         schedule_document_indexing(document.id)
 
+        from app.services.audit_service import log_activity
+        log_activity(
+            action="DOCUMENT_OCR_PROCESSED",
+            status="SUCCESS",
+            target_resource=f"document:{document.id}",
+            department=resolved_dept,
+            details={"pages": len(page_obj_map), "confidence": report.overall_confidence, "status": final_status},
+        )
+
     except Exception as proc_error:
 
         logger.error(
@@ -684,6 +729,13 @@ def process_document_task(
                         )
                     )
                 db.commit()
+                from app.services.audit_service import log_activity
+                log_activity(
+                    action="DOCUMENT_OCR_FAILED",
+                    status="FAILURE",
+                    target_resource=f"document:{document_id}",
+                    failure_reason=str(proc_error),
+                )
         except Exception:
             db.rollback()
             logger.exception(
@@ -1287,32 +1339,20 @@ def list_documents(
     )
 
     # --------------------------------------------------------
-    # RBAC & DEPARTMENT ACCESS FILTERING
+    # RBAC & STRICT DEPARTMENT ISOLATION
     # --------------------------------------------------------
-    user_role = UserRole.normalize(current_user.role)
-    if user_role == UserRole.ADMIN.value:
-        if department:
-            query = query.filter(Document.department.ilike(f"%{department.strip()}%"))
-    elif user_role == UserRole.UPLOAD_MAKER.value:
-        maker_dept = (current_user.department or "").strip()
-        if maker_dept:
-            query = query.filter(
-                or_(
-                    Document.department.ilike(f"%{maker_dept}%"),
-                    Document.uploaded_by == current_user.id,
-                )
-            )
+    if current_user.is_super_admin:
+        if department and department.strip() and department.upper() not in ("ALL", "ALL DEPARTMENTS"):
+            dept_clean = department.strip().upper()
+            query = query.filter(func.upper(Document.department) == dept_clean)
+    else:
+        # Strict department isolation everywhere: non-Super Admin can only access their assigned department.
+        # Fall back to documents uploaded by the user if user has no assigned department (legacy support).
+        user_dept = (current_user.department or "").strip().upper()
+        if user_dept:
+            query = query.filter(func.upper(Document.department) == user_dept)
         else:
             query = query.filter(Document.uploaded_by == current_user.id)
-        if department:
-            query = query.filter(Document.department.ilike(f"%{department.strip()}%"))
-    elif user_role == UserRole.UPLOAD_CHECKER.value:
-        checker_dept = (current_user.department or "").strip()
-        query = query.filter(Document.assigned_checker == current_user.id)
-        if checker_dept:
-            query = query.filter(Document.department.ilike(f"%{checker_dept}%"))
-        if department:
-            query = query.filter(Document.department.ilike(f"%{department.strip()}%"))
 
 
 
@@ -1415,34 +1455,30 @@ def list_documents(
     response_model=DashboardStatsResponse,
 )
 def dashboard_stats(
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    total_documents = (
-        db.query(
-            func.count(Document.id)
-        ).scalar()
-        or 0
-    )
+    base_query = db.query(Document)
+    if not current_user.is_super_admin:
+        user_dept = (current_user.department or "").strip().upper()
+        if not user_dept:
+            base_query = base_query.filter(func.upper(Document.department) == "__NONE__")
+        else:
+            base_query = base_query.filter(func.upper(Document.department) == user_dept)
+
+    total_documents = base_query.count()
 
     processed_today = (
-        db.query(
-            func.count(Document.id)
-        )
+        base_query
         .filter(
             Document.processed_at.isnot(None),
-            func.date(
-                Document.processed_at
-            )
-            == func.current_date(),
+            func.date(Document.processed_at) == func.current_date(),
         )
-        .scalar()
-        or 0
+        .count()
     )
 
     pending_review = (
-        db.query(
-            func.count(Document.id)
-        )
+        base_query
         .filter(
             or_(
                 Document.status.ilike("%PENDING%"),
@@ -1450,27 +1486,19 @@ def dashboard_stats(
                 Document.status == "needs_review",
             )
         )
-        .scalar()
-        or 0
+        .count()
     )
 
     average_confidence = (
-        db.query(
-            func.avg(
-                Document.overall_confidence
-            )
-        )
-        .filter(
-            Document.overall_confidence.isnot(None)
-        )
+        base_query
+        .filter(Document.overall_confidence.isnot(None))
+        .with_entities(func.avg(Document.overall_confidence))
         .scalar()
     )
 
     recent_documents = (
-        db.query(Document)
-        .order_by(
-            Document.uploaded_at.desc()
-        )
+        base_query
+        .order_by(Document.uploaded_at.desc())
         .limit(5)
         .all()
     )
@@ -1504,7 +1532,6 @@ def get_review_queue(
     current_user: User = Depends(require_upload_checker),
     db: Session = Depends(get_db),
 ):
-    user_role = UserRole.normalize(current_user.role)
     query = (
         db.query(Document)
         .options(
@@ -1522,11 +1549,11 @@ def get_review_queue(
             )
         )
     )
-    if user_role == UserRole.UPLOAD_CHECKER.value:
-        checker_dept = (current_user.department or "").strip()
-        query = query.filter(Document.assigned_checker == current_user.id)
-        if checker_dept:
-            query = query.filter(Document.department.ilike(f"%{checker_dept}%"))
+    if not current_user.is_super_admin:
+        user_dept = (current_user.department or "").strip().upper()
+        if not user_dept:
+            return []
+        query = query.filter(func.upper(Document.department) == user_dept)
     return query.order_by(Document.uploaded_at.desc()).all()
 
 
@@ -1579,6 +1606,16 @@ def get_document(
         )
 
     verify_document_view_access(document, current_user, db=db)
+    from app.services.audit_service import log_activity
+    log_activity(
+        action="DOCUMENT_VIEW",
+        status="SUCCESS",
+        actor_id=current_user.id,
+        username=current_user.email,
+        department=document.department,
+        role=current_user.role,
+        target_resource=f"document:{document.id}",
+    )
     return document
 
 
@@ -1618,6 +1655,17 @@ def approve_document(
 
     db.commit()
     db.refresh(document)
+
+    from app.services.audit_service import log_activity
+    log_activity(
+        action="DOCUMENT_APPROVE",
+        status="SUCCESS",
+        actor_id=current_user.id,
+        username=current_user.email,
+        department=document.department,
+        role=current_user.role,
+        target_resource=f"document:{document.id}",
+    )
     return document
 
 
@@ -1656,6 +1704,18 @@ def reject_document(
 
     db.commit()
     db.refresh(document)
+
+    from app.services.audit_service import log_activity
+    log_activity(
+        action="DOCUMENT_REJECT",
+        status="SUCCESS",
+        actor_id=current_user.id,
+        username=current_user.email,
+        department=document.department,
+        role=current_user.role,
+        target_resource=f"document:{document.id}",
+        failure_reason=payload.reason,
+    )
     return document
 
 
@@ -1694,7 +1754,140 @@ def request_document_revision(
 
     db.commit()
     db.refresh(document)
+
+    from app.services.audit_service import log_activity
+    log_activity(
+        action="DOCUMENT_REVISION_REQUEST",
+        status="SUCCESS",
+        actor_id=current_user.id,
+        username=current_user.email,
+        department=document.department,
+        role=current_user.role,
+        target_resource=f"document:{document.id}",
+        details={"reason": payload.notes or payload.reason},
+    )
     return document
+
+
+@router.patch(
+    "/{document_id}/fields/{field_id}",
+    summary="Edit extracted field value (Checker / Admin)",
+)
+def update_extracted_field(
+    document_id: int,
+    field_id: int,
+    payload: dict,
+    current_user: User = Depends(require_upload_checker),
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    verify_document_review_access(document, current_user, db=db)
+
+    field = db.query(ExtractedField).filter(
+        ExtractedField.id == field_id,
+        ExtractedField.document_id == document_id,
+    ).first()
+    if not field:
+        raise HTTPException(status_code=404, detail="Extracted field not found")
+
+    new_val = payload.get("value")
+    if new_val is None:
+        new_val = payload.get("field_value")
+    if new_val is None:
+        new_val = payload.get("corrected_value")
+
+    if new_val is not None:
+        if field.original_value is None:
+            field.original_value = field.field_value
+        field.corrected_value = str(new_val)
+        field.field_value = str(new_val)
+        db.commit()
+        db.refresh(field)
+
+    from app.services.audit_service import log_activity
+    log_activity(
+        action="FIELD_UPDATE",
+        status="SUCCESS",
+        actor_id=current_user.id,
+        username=current_user.email,
+        department=document.department,
+        role=current_user.role,
+        target_resource=f"document:{document_id}:field:{field_id}",
+        details={"field_name": field.field_name, "value": str(new_val)},
+    )
+    return {
+        "id": field.id,
+        "field_name": field.field_name,
+        "field_value": field.field_value,
+        "corrected_value": field.corrected_value,
+    }
+
+
+@router.patch(
+    "/{document_id}/ocr/{ocr_id}",
+    summary="Correct extracted OCR text (Checker / Admin)",
+)
+def update_ocr_text(
+    document_id: int,
+    ocr_id: int,
+    payload: dict,
+    current_user: User = Depends(require_upload_checker),
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    verify_document_review_access(document, current_user, db=db)
+
+    ocr = db.query(OCRResult).filter(
+        OCRResult.id == ocr_id,
+        OCRResult.document_id == document_id,
+    ).first()
+    if not ocr:
+        raise HTTPException(status_code=404, detail="OCR record not found")
+
+    new_text = payload.get("extracted_text")
+    if new_text is None:
+        new_text = payload.get("text")
+    if new_text is None:
+        raise HTTPException(status_code=400, detail="Missing new OCR text")
+
+    # Preserve original raw OCR text before any corrections
+    if not ocr.raw_text and ocr.extracted_text:
+        ocr.raw_text = ocr.extracted_text
+
+    old_preview = (ocr.extracted_text or "")[:120]
+    ocr.extracted_text = str(new_text)
+    db.commit()
+    db.refresh(ocr)
+
+    from app.services.audit_service import log_activity
+    log_activity(
+        action="OCR_TEXT_CORRECTED",
+        status="SUCCESS",
+        actor_id=current_user.id,
+        username=current_user.email,
+        department=document.department,
+        role=current_user.role,
+        target_resource=f"document:{document_id}:ocr:{ocr_id}",
+        details={
+            "page_id": ocr.page_id,
+            "old_preview": old_preview,
+            "new_preview": str(new_text)[:120],
+        },
+    )
+    return {
+        "id": ocr.id,
+        "document_id": ocr.document_id,
+        "page_id": ocr.page_id,
+        "extracted_text": ocr.extracted_text,
+        "raw_text": ocr.raw_text,
+    }
+
 
 
 @router.post(
@@ -1712,13 +1905,36 @@ def assign_document_checker(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    # If Department Admin, document must be in their department
+    if not current_user.is_super_admin:
+        admin_dept = (current_user.department or "").strip().upper()
+        doc_dept = (document.department or "").strip().upper()
+        if doc_dept != admin_dept:
+            from app.services.audit_service import log_activity
+            log_activity(
+                action="UNAUTHORIZED_ACCESS",
+                status="FAILURE",
+                actor_id=current_user.id,
+                username=current_user.email,
+                department=current_user.department,
+                role=current_user.role,
+                target_resource=f"document:{document_id}",
+                failure_reason="Department Admin cannot assign documents outside their department",
+            )
+            raise HTTPException(status_code=403, detail="Department Admins cannot assign documents outside their department")
+
     checker = db.query(User).filter(User.id == payload.checker_id).first()
     if not checker:
         raise HTTPException(status_code=404, detail=f"User with ID {payload.checker_id} not found")
 
     checker_role = UserRole.normalize(checker.role)
-    if checker_role not in (UserRole.UPLOAD_CHECKER.value, UserRole.ADMIN.value):
+    if not (UserRole.is_checker(checker_role) or UserRole.is_admin(checker_role)):
         raise HTTPException(status_code=400, detail="Assigned user must be an Upload Checker or Admin")
+
+    doc_dept = (document.department or "").strip().upper()
+    chk_dept = (checker.department or "").strip().upper()
+    if doc_dept and chk_dept and doc_dept != chk_dept and not checker.is_super_admin:
+        raise HTTPException(status_code=400, detail="Checker must belong to the document's department")
 
     document.assigned_checker = payload.checker_id
     document.updated_at = func.now()
@@ -1734,6 +1950,18 @@ def assign_document_checker(
 
     db.commit()
     db.refresh(document)
+
+    from app.services.audit_service import log_activity
+    log_activity(
+        action="DOCUMENT_ASSIGN_CHECKER",
+        status="SUCCESS",
+        actor_id=current_user.id,
+        username=current_user.email,
+        department=document.department,
+        role=current_user.role,
+        target_resource=f"document:{document.id}",
+        details={"assigned_to": checker.email},
+    )
     return document
 
 
@@ -1764,16 +1992,56 @@ def delete_document(
             detail="Document not found.",
         )
 
-    # Only admin or uploader can delete
-    user_role = UserRole.normalize(current_user.role)
-    if user_role != UserRole.ADMIN.value and document.uploaded_by != current_user.id:
+    # Department and Role authorization
+    doc_dept = (document.department or "").strip().upper()
+    user_dept = (current_user.department or "").strip().upper()
+
+    if current_user.is_super_admin:
+        pass
+    elif current_user.is_dept_admin:
+        if doc_dept != user_dept:
+            from app.services.audit_service import log_activity
+            log_activity(
+                action="UNAUTHORIZED_ACCESS",
+                status="FAILURE",
+                actor_id=current_user.id,
+                username=current_user.email,
+                department=current_user.department,
+                role=current_user.role,
+                target_resource=f"document:{document_id}",
+                failure_reason="Department Admin cannot delete documents outside their department",
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Access forbidden: You cannot delete documents outside your department",
+            )
+    elif current_user.is_strict_maker:
+        if doc_dept != user_dept or document.uploaded_by != current_user.id:
+            from app.services.audit_service import log_activity
+            log_activity(
+                action="UNAUTHORIZED_ACCESS",
+                status="FAILURE",
+                actor_id=current_user.id,
+                username=current_user.email,
+                department=current_user.department,
+                role=current_user.role,
+                target_resource=f"document:{document_id}",
+                failure_reason="Makers can only delete their own documents within their department",
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Access forbidden: You can only delete your own documents in your department",
+            )
+    else:
+        # Checkers cannot delete
         raise HTTPException(
             status_code=403,
-            detail="Access forbidden: Only Administrators or the document uploader can delete this document",
+            detail="Access forbidden: Checkers cannot delete documents",
         )
 
-
     try:
+        doc_filename = document.original_filename
+        doc_dept_val = document.department
 
         delete_document_embeddings(db, document.id)
         db.delete(document)
@@ -1786,15 +2054,24 @@ def delete_document(
             missing_ok=True
         )
 
+        from app.services.audit_service import log_activity
+        log_activity(
+            action="DOCUMENT_DELETE",
+            status="SUCCESS",
+            actor_id=current_user.id,
+            username=current_user.email,
+            department=doc_dept_val,
+            role=current_user.role,
+            target_resource=f"document:{document_id}",
+            details={"filename": doc_filename},
+        )
+
     except Exception:
-
         db.rollback()
-
         logger.exception(
             "Failed to delete document %s",
             document_id,
         )
-
         raise HTTPException(
             status_code=500,
             detail="Failed to delete document.",
