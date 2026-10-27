@@ -5,6 +5,10 @@ from sqlalchemy.engine import URL
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = BASE_DIR / ".env"
+if not ENV_FILE.exists():
+    # Support the project-root .env used by the repository's local setup while
+    # still preferring backend/.env when one is present.
+    ENV_FILE = BASE_DIR.parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -66,11 +70,11 @@ class Settings(BaseSettings):
     # installed (no automatic downloads). Left disabled when OLLAMA_MODEL is
     # empty, so the chatbot stays on deterministic extractive answers.
     #
-    # The generation model is chosen here and nowhere else: switch it by setting
+    # llama3.2:3b is the measured fast local default. Switch it by setting
     # OLLAMA_MODEL to any locally installed model name (ollama list) and restart
     # the backend. Nothing in the code keys off a particular model name.
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
-    OLLAMA_MODEL: str = ""
+    OLLAMA_MODEL: str = "llama3.2:3b"
     OLLAMA_ENABLED: bool = True
     # Reasoning models (qwen3 and similar) answer only after a scratchpad, and
     # that scratchpad counts against OLLAMA_MAX_NEW_TOKENS: with thinking left on
@@ -80,12 +84,12 @@ class Settings(BaseSettings):
     OLLAMA_THINKING: bool = False
     # Connect/keepalive budget for the availability probe, in seconds.
     OLLAMA_CONNECT_TIMEOUT: float = 2.0
-    # Generation budget. A 3B local model needs this much on CPU only
-    # occasionally, so the request is abandoned rather than left hanging.
-    OLLAMA_GENERATE_TIMEOUT: float = 90.0
+    # The measured llama3.2:3b CPU p95 is about 23 seconds; bound slow turns
+    # while leaving room for ordinary machine load.
+    OLLAMA_GENERATE_TIMEOUT: float = 45.0
     # Restrict the prompt window; the evidence block is trimmed to fit.
     OLLAMA_NUM_CTX: int = 4096
-    OLLAMA_MAX_NEW_TOKENS: int = 320
+    OLLAMA_MAX_NEW_TOKENS: int = 160
 
     # Default Admin initialization
     DEFAULT_ADMIN_EMAIL: str = "admin@docsentinel.local"

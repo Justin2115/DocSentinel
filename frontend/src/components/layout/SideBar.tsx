@@ -10,7 +10,7 @@ import {
   ChevronLeft,
   AdminPanelSettings,
 } from "@mui/icons-material";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 
@@ -21,6 +21,7 @@ export default function SideBar() {
   );
 
   const [collapsed, setCollapsed] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
@@ -29,22 +30,21 @@ export default function SideBar() {
     localStorage.setItem("theme", darkMode ? "dark" : "light");
   }, [darkMode]);
 
-  const navigationItems = [
-    { name: "Dashboard", path: "/dashboard", icon: <Dashboard /> },
-    ...(canUpload
-      ? [{ name: "Upload", path: "/upload", icon: <Upload /> }]
-      : []),
-    { name: "Library", path: "/library", icon: <Folder /> },
-    { name: "Ask a question", path: "/ask", icon: <Chat /> },
-    ...(canReview
-      ? [{ name: "Review queue", path: "/review", icon: <AssignmentTurnedIn /> }]
-      : []),
-    ...(isAdmin
-      ? [{ name: "Settings", path: "/settings", icon: <Settings /> }]
-      : []),
-    ...(isAdmin
-      ? [{ name: "Admin Panel", path: "/admin", icon: <AdminPanelSettings /> }]
-      : []),
+  const groups = [
+    {
+      name: "Workspace",
+      items: [
+        { name: "Overview", path: "/dashboard", icon: <Dashboard /> },
+        { name: "Documents", path: "/library", icon: <Folder /> },
+        ...(canUpload ? [{ name: "Upload documents", path: "/upload", icon: <Upload /> }] : []),
+        { name: "Ask DocSentinel", path: "/ask", icon: <Chat /> },
+      ],
+    },
+    ...(canReview ? [{ name: "Processing", items: [{ name: "Review queue", path: "/review", icon: <AssignmentTurnedIn /> }] }] : []),
+    ...(isAdmin ? [{ name: "Administration", items: [
+      { name: "System settings", path: "/settings", icon: <Settings /> },
+      { name: "Admin panel", path: "/admin", icon: <AdminPanelSettings /> },
+    ] }] : []),
   ];
 
   return (
@@ -57,11 +57,16 @@ export default function SideBar() {
           )}
         </div>
 
-        <nav>
-          {navigationItems.map((item) => (
+        <nav aria-label="Main navigation">
+          {groups.map((group) => (
+            <div className="navGroup" key={group.name}>
+              {!collapsed && <div className="navGroupLabel">{group.name}</div>}
+              {group.items.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
+              title={collapsed ? item.name : undefined}
+              aria-current={location.pathname === item.path ? "page" : undefined}
               className={({ isActive }) =>
                 isActive ? "navItem active" : "navItem"
               }
@@ -69,6 +74,8 @@ export default function SideBar() {
               {item.icon}
               {!collapsed && <span>{item.name}</span>}
             </NavLink>
+          ))}
+            </div>
           ))}
         </nav>
       </div>
@@ -79,6 +86,7 @@ export default function SideBar() {
           className="modeButton"
           onClick={() => setDarkMode((prev) => !prev)}
           title={darkMode ? "Light mode" : "Dark mode"}
+          aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
         >
           {darkMode ? <LightMode /> : <DarkMode />}
           {!collapsed && (
@@ -91,6 +99,7 @@ export default function SideBar() {
           className="collapseButton"
           onClick={() => setCollapsed((prev) => !prev)}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           <ChevronLeft
             className={collapsed ? "rotateIcon" : ""}

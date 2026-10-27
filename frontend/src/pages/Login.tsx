@@ -109,36 +109,26 @@ const Login = () => {
 	};
 
 	return (
-		<div
-			style={{
-				minWidth: "100vw",
-				minHeight: "100vh",
-				display: "flex",
-				alignItems: "center",
-				justifyContent: "center",
-				background: "linear-gradient(135deg, #0e0f14 0%, #151722 50%, #1b1626 100%)",
-				padding: "24px",
-				boxSizing: "border-box",
-			}}
-		>
+		<div className="authPage">
 			<Box sx={{ width: "100%", maxWidth: 440 }}>
 				<Card>
 					<Box sx={{ p: { xs: 2, sm: 3 } }}>
 						{/* Brand & Title */}
 						<Box sx={{ textAlign: "center", mb: 3 }}>
 							<Box
+								className="authBrandMark"
 								sx={{
 									width: 48,
 									height: 48,
-									borderRadius: "14px",
-									background: "linear-gradient(135deg, #a855f7 0%, #6366f1 100%)",
+									borderRadius: "8px",
+									background: "#1f2328",
 									color: "#fff",
 									fontWeight: 700,
 									fontSize: 24,
 									display: "inline-flex",
 									alignItems: "center",
 									justifyContent: "center",
-									boxShadow: "0 8px 24px rgba(168, 85, 247, 0.35)",
+									boxShadow: "none",
 									mb: 1.5,
 								}}
 							>
@@ -149,14 +139,14 @@ const Login = () => {
 								sx={{
 									fontWeight: 700,
 									letterSpacing: "-0.5px",
-									color: "var(--text-h, #ffffff)",
+								color: "var(--text-primary, #1f2328)",
 								}}
 							>
 								DocSentinel
 							</Typography>
 							<Typography
 								variant="body2"
-								sx={{ color: "var(--text, #9ca3af)", mt: 0.5 }}
+								sx={{ color: "var(--text-secondary, #59636e)", mt: 0.5 }}
 							>
 								AI-Powered Document Intelligence & Security
 							</Typography>
@@ -190,13 +180,13 @@ const Login = () => {
 									justifyContent: "center",
 									padding: "12px 18px",
 									borderRadius: "12px",
-									border: "1px solid rgba(255, 255, 255, 0.15)",
+								border: "1px solid #d1d9e0",
 									background: "#ffffff",
 									color: "#1f2937",
 									fontWeight: 600,
 									fontSize: "15px",
 									cursor: googleLoading || loading ? "not-allowed" : "pointer",
-									boxShadow: "0 2px 10px rgba(0, 0, 0, 0.08)",
+								boxShadow: "none",
 									transition: "all 0.2s ease-in-out",
 								}}
 							>

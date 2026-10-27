@@ -14,7 +14,7 @@ import pytest
 backend_dir = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(backend_dir))
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.db.session import SessionLocal
 from app.models.document import Document, DocumentPage, OCRResult
 from app.models.user import User
@@ -33,6 +33,16 @@ def clean_provider_cache():
     yield
     llm_service._status_cache["payload"] = None
     set_encode_override(None)
+
+
+def test_fast_llama_defaults_without_environment(monkeypatch):
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+
+    config = Settings(_env_file=None)
+
+    assert config.OLLAMA_MODEL == "llama3.2:3b"
+    assert config.OLLAMA_GENERATE_TIMEOUT == 45.0
+    assert config.OLLAMA_MAX_NEW_TOKENS == 160
 
 
 class FakeOllama:

@@ -8,3 +8,8 @@ backend/uploads/
 
 # Local vector database
 backend/vector_db/
+.env
+
+.env.*
+
+!.env.example
