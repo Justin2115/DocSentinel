@@ -1,4 +1,3 @@
-import NotificationsNoneIcon from "@mui/icons-material/NotificationsNone";
 import SearchIcon from "@mui/icons-material/Search";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -15,6 +14,7 @@ export default function TopBar() {
   const [failedProfilePicture, setFailedProfilePicture] = useState<string | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const profileButtonRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -33,6 +33,18 @@ export default function TopBar() {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        profileButtonRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open]);
 
   const displayName = user?.name || "User";
   const normalizedRole = user?.role.toUpperCase();
@@ -92,21 +104,15 @@ export default function TopBar() {
       </div>
 
       <div className="topbarRight">
-        <button
-          type="button"
-          className="notificationButton"
-          aria-label="Notifications"
-        >
-          <NotificationsNoneIcon />
-
-          <span className="notificationDot" />
-        </button>
-
         <div className="profileWrapper" ref={dropdownRef}>
           <button
             type="button"
             className="profile"
+          ref={profileButtonRef}
             onClick={() => setOpen((prev) => !prev)}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-controls={open ? "profile-menu" : undefined}
           >
             {profilePicture ? (
               <img
@@ -132,7 +138,7 @@ export default function TopBar() {
           </button>
 
           {open && (
-            <div className="profileDropdown">
+            <div className="profileDropdown" id="profile-menu" role="menu" aria-label="Account menu">
               <div className="profileDropdownHeader">
                 {profilePicture ? (
                   <img
@@ -161,6 +167,7 @@ export default function TopBar() {
               <button
                 type="button"
                 className="dropdownItem"
+                role="menuitem"
                 onClick={() => {
                   setOpen(false);
                   navigate("/profile");
@@ -174,6 +181,7 @@ export default function TopBar() {
                 <button
                   type="button"
                   className="dropdownItem"
+                  role="menuitem"
                   onClick={() => {
                     setOpen(false);
                     navigate("/admin");
@@ -187,6 +195,7 @@ export default function TopBar() {
               <button
                 type="button"
                 className="dropdownItem logoutItem"
+                role="menuitem"
                 onClick={handleLogout}
               >
                 <LogoutIcon />

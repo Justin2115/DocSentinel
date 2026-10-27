@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     # The measured llama3.2:3b CPU p95 is about 23 seconds; bound slow turns
     # while leaving room for ordinary machine load.
     OLLAMA_GENERATE_TIMEOUT: float = 45.0
+    OLLAMA_TEMPERATURE: float = 0.0
+    OLLAMA_GENERAL_TEMPERATURE: float = 0.2
     # Restrict the prompt window; the evidence block is trimmed to fit.
     OLLAMA_NUM_CTX: int = 4096
     OLLAMA_MAX_NEW_TOKENS: int = 160

@@ -13,12 +13,14 @@ from app.api.auth import admin_router, router as auth_router
 from app.api.documents import router as documents_router
 from app.api.query import router as query_router
 from app.api.search import router as search_router
+from app.api.conversations import router as conversations_router
 
 from app.core.config import BASE_DIR, settings
 from app.db.base import Base
 import app.models.document
 import app.models.embedding
 import app.models.user
+import app.models.conversation
 from app.services.auth_service import init_default_admin
 
 
@@ -88,6 +90,7 @@ app.include_router(admin_router)
 app.include_router(documents_router)
 app.include_router(search_router)
 app.include_router(query_router)
+app.include_router(conversations_router)
 
 
 
@@ -152,6 +155,30 @@ def initialize_database() -> None:
                 ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS can_review BOOLEAN DEFAULT TRUE;
                 ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
                 ALTER TABLE ocr_results ADD COLUMN IF NOT EXISTS raw_text TEXT;
+                -- Upgrade conversation tables created by the earlier chat schema.
+                -- create_all() creates missing tables but does not add columns to
+                -- tables that already exist.
+                ALTER TABLE conversations ADD COLUMN IF NOT EXISTS chat_mode VARCHAR(16) NOT NULL DEFAULT 'documents';
+                ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS request_metadata JSONB;
+                ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(64);
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = 'ck_conversations_chat_mode'
+                    ) THEN
+                        ALTER TABLE conversations ADD CONSTRAINT ck_conversations_chat_mode
+                        CHECK (chat_mode IN ('documents', 'general'));
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = 'uq_conversation_message_idempotency'
+                    ) THEN
+                        ALTER TABLE conversation_messages ADD CONSTRAINT uq_conversation_message_idempotency
+                        UNIQUE (conversation_id, idempotency_key);
+                    END IF;
+                END $$;
+                CREATE INDEX IF NOT EXISTS ix_conversations_owner_updated
+                    ON conversations(owner_user_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS ix_conversation_messages_order
+                    ON conversation_messages(conversation_id, created_at, id);
                 DO $$ BEGIN
                     IF NOT EXISTS (
                         SELECT 1 FROM pg_constraint WHERE conname = 'uq_folder_permission_folder_role'

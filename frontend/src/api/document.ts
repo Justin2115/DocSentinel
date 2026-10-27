@@ -168,6 +168,15 @@ export interface DocumentProcessing {
 	error: string | null;
 }
 
+export interface RecentUpload {
+	document_id: number;
+	filename: string;
+	department: string | null;
+	document_type: string | null;
+	uploaded_at: string | null;
+	processing: DocumentProcessing;
+}
+
 export interface DashboardStats {
 	total_documents: number;
 	processed_today: number;
@@ -197,6 +206,12 @@ export const getDocuments = (
 			signal,
 		}
 	);
+
+export const getRecentUploads = (limit = 20, signal?: AbortSignal) =>
+	apiClient.get<{ items: RecentUpload[] }>("/documents/uploads/recent", {
+		params: { limit },
+		signal,
+	});
 
 export const getDocument = (
 	id: number

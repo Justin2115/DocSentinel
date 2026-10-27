@@ -47,6 +47,7 @@ type DisplayType =
 	| "PDF"
 	| "DOCX"
 	| "JPG"
+	| "JPEG"
 	| "PNG"
 	| "XLSX"
 	| "DOC"
@@ -56,7 +57,7 @@ const displayType = (document: DocumentItem): DisplayType => {
 	const extension =
 		document.original_filename.split(".").pop()?.toUpperCase() || "DOC";
 
-	return ["PDF", "DOCX", "JPG", "PNG", "XLSX", "DOC", "XLS"].includes(
+	return ["PDF", "DOCX", "JPG", "JPEG", "PNG", "XLSX", "DOC", "XLS"].includes(
 		extension
 	)
 		? (extension as DisplayType)
@@ -95,14 +96,6 @@ const highlightPassage = (text: string, needle: string | null): ReactNode => {
 	}
 	return parts;
 };
-
-const filterByType = (
-	items: DocumentRecord[],
-	typeFilter: string
-): DocumentRecord[] =>
-	typeFilter === "All types"
-		? items
-		: items.filter((document) => displayType(document) === typeFilter);
 
 const displayStatus = (
 	status: string | null
@@ -181,7 +174,7 @@ const Library = () => {
 			statusFilter === "All status"
 				? undefined
 				: statusFilter === "Processed"
-					? "completed"
+					? "processed"
 					: statusFilter === "Needs review"
 						? "needs_review"
 						: statusFilter === "Indexed"
@@ -193,6 +186,7 @@ const Library = () => {
 				: departmentFilter,
 		skip: (page - 1) * pageSize,
 		limit: pageSize,
+		file_type: typeFilter === "All types" ? undefined : typeFilter.toLowerCase(),
 	});
 
 	useEffect(() => {
@@ -360,14 +354,9 @@ const Library = () => {
 
 		getDocuments(listQuery(), signal)
 			.then((response) => {
-				const items = filterByType(response.data.items, typeFilter);
-				setDocuments(items);
+				setDocuments(response.data.items);
 				setHits([]);
-				setTotal(
-					typeFilter === "All types"
-						? response.data.total
-						: items.length
-				);
+				setTotal(response.data.total);
 			})
 			.catch((error) => {
 				if (!isRequestCanceled(error)) {
@@ -406,9 +395,7 @@ const Library = () => {
 		const timer = window.setTimeout(() => {
 			getDocuments(listQuery())
 				.then((response) => {
-					setDocuments(
-						filterByType(response.data.items, typeFilter)
-					);
+					setDocuments(response.data.items);
 				})
 				.catch(() => {
 					// Keep the last known statuses; the next tick retries.
@@ -509,6 +496,10 @@ const Library = () => {
 
 
 	const removeDocument = async (id: number) => {
+		const target = documents.find((document) => document.id === id);
+		if (!window.confirm(`Delete ${target?.original_filename || "this document"}? This cannot be undone.`)) {
+			return;
+		}
 		setDeletingId(id);
 		try {
 			await deleteDocument(id);
@@ -553,6 +544,7 @@ const Library = () => {
 			case "PDF":
 				return <PictureAsPdfIcon />;
 			case "JPG":
+			case "JPEG":
 			case "PNG":
 				return <ImageIcon />;
 			case "XLSX":
@@ -664,9 +656,12 @@ const Library = () => {
 						>
 							<option>All types</option>
 							<option>PDF</option>
+							<option>DOC</option>
 							<option>DOCX</option>
 							<option>JPG</option>
+							<option>JPEG</option>
 							<option>PNG</option>
+							<option>XLS</option>
 							<option>XLSX</option>
 						</select>
 						<KeyboardArrowDownIcon />
@@ -832,7 +827,7 @@ const Library = () => {
 							>
 								Previous
 							</button>
-							<button className="pageActive">{page}</button>
+							<span className="pageActive" aria-current="page">{page}</span>
 							<button
 								disabled={page * pageSize >= total}
 								onClick={() => setPage((current) => current + 1)}

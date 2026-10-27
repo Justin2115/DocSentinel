@@ -17,6 +17,7 @@ import { renderAsync } from "docx-preview";
 
 import {
   getDocumentProcessing,
+  getRecentUploads,
   retryDocumentProcessing,
   uploadDocument as uploadDocumentRequest,
 } from "../api/document";
@@ -42,27 +43,6 @@ export interface TrackedUpload {
   document_type?: string | null;
   uploaded_at: string;
 }
-
-const SESSION_STORAGE_KEY = "docsentinel_session_uploads";
-
-const loadSessionUploads = (): TrackedUpload[] => {
-  try {
-    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) return [];
-    const list = JSON.parse(raw);
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
-  }
-};
-
-const saveSessionUploads = (items: TrackedUpload[]) => {
-  try {
-    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(items));
-  } catch {
-    // SessionStorage error handling
-  }
-};
 
 const POLL_INTERVAL_MS = 2500;
 
@@ -118,9 +98,9 @@ export default function Upload() {
   const [uploadPercent, setUploadPercent] =
     useState(0);
 
-  // Tracked uploads persisting across navigation and refresh in the active session
+  // Hydrated from the authenticated user's persisted upload queue.
   const [trackedUploads, setTrackedUploads] =
-    useState<TrackedUpload[]>(loadSessionUploads);
+    useState<TrackedUpload[]>([]);
 
   // Live pipeline state for each tracked document ID
   const [processingMap, setProcessingMap] =
@@ -134,6 +114,9 @@ export default function Upload() {
 
   const [uploadError, setUploadError] =
     useState("");
+  const [uploadQueueError, setUploadQueueError] = useState("");
+  const [uploadQueueLoading, setUploadQueueLoading] = useState(true);
+  const [uploadQueueReload, setUploadQueueReload] = useState(0);
 
   // Target department selection (optional, default auto-detection)
   const [selectedDepartment, setSelectedDepartment] =
@@ -255,7 +238,50 @@ export default function Upload() {
     return `${action}: rejected with HTTP ${status}.`;
   };
 
-  // Follow the pipeline for every tracked upload in the active session.
+  useEffect(() => {
+    const controller = new AbortController();
+    let mounted = true;
+
+    getRecentUploads(20, controller.signal)
+      .then(({ data }) => {
+        if (!mounted) return;
+        const fromServer = data.items.map((item) => ({
+          id: item.document_id,
+          filename: item.filename,
+          department: item.department,
+          document_type: item.document_type,
+          uploaded_at: item.uploaded_at || "",
+        }));
+        setTrackedUploads((current) => {
+          const currentIds = new Set(current.map((item) => item.id));
+          return [...current, ...fromServer.filter((item) => !currentIds.has(item.id))];
+        });
+        setProcessingMap((current) => {
+          const next = { ...current };
+          for (const item of data.items) {
+            if (!(item.document_id in next)) {
+              next[item.document_id] = item.processing;
+            }
+          }
+          return next;
+        });
+      })
+      .catch((error: unknown) => {
+        if (mounted && !isCancelled(error)) {
+          setUploadQueueError(describeFailure(error, "Could not load recent uploads"));
+        }
+      })
+      .finally(() => {
+        if (mounted) setUploadQueueLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [uploadQueueReload]);
+
+  // Follow the pipeline for every tracked upload owned by the signed-in user.
   useEffect(() => {
     if (trackedUploads.length === 0) {
       return;
@@ -361,7 +387,6 @@ export default function Upload() {
   const dismissUpload = (docId: number) => {
     setTrackedUploads((prev) => {
       const next = prev.filter((item) => item.id !== docId);
-      saveSessionUploads(next);
       return next;
     });
     setProcessingMap((prev) => {
@@ -374,6 +399,12 @@ export default function Upload() {
       delete next[docId];
       return next;
     });
+  };
+
+  const refreshUploadQueue = () => {
+    setUploadQueueLoading(true);
+    setUploadQueueError("");
+    setUploadQueueReload((value) => value + 1);
   };
 
   const getFileIcon = () => {
@@ -420,7 +451,6 @@ export default function Upload() {
 
       setTrackedUploads((prev) => {
         const next = [newTracked, ...prev.filter((p) => p.id !== newTracked.id)];
-        saveSessionUploads(next);
         return next;
       });
 
@@ -687,7 +717,21 @@ export default function Upload() {
         </div>
       )}
 
+      {uploadQueueError && (
+        <div className="uploadError" role="alert">
+          <strong>Recent uploads unavailable</strong>
+          <span>{uploadQueueError}</span>
+          <button type="button" className="previewButton" onClick={refreshUploadQueue}>
+            Try again
+          </button>
+        </div>
+      )}
+
       {/* ================= PROCESSING STATUS ================= */}
+
+      {uploadQueueLoading && trackedUploads.length === 0 && (
+        <p role="status" style={{ margin: "20px 0" }}>Loading your recent uploads…</p>
+      )}
 
       {trackedUploads.length > 0 && (
         <div style={{ display: "grid", gap: 14, margin: "20px 0" }}>
@@ -784,10 +828,10 @@ export default function Upload() {
                         type="button"
                         className="previewButton"
                         onClick={() => dismissUpload(upload.id)}
-                        title="Dismiss status"
+                        title="Hide this status for now"
                       >
                         <CloseOutlinedIcon sx={{ fontSize: 16 }} />
-                        Dismiss
+                        Hide status
                       </button>
                     )}
                   </div>

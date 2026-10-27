@@ -170,6 +170,43 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 .searchHitButton:hover, .sourceCard:hover { background: var(--surface-secondary); }
 .askQuestionPage { min-height: calc(100vh - 105px); }
 .askQuestionHeader { margin-bottom: 16px !important; }
+.chatModeToggle { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-secondary); }
+.chatModeToggle button { padding: 4px 8px; border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 12px; }
+.chatModeToggle button.active { background: var(--surface); color: var(--text-primary); box-shadow: var(--shadow-sm); }
+.providerStatus { color: var(--text-muted); font-size: 11px; }
+.providerStatus.ready { color: var(--success); }
+.loadOlderMessages { width: 100%; margin: 0 0 16px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--accent); font-size: 12px; }
+.loadOlderMessages:hover { background: var(--surface-secondary); }
+.chatContainer { flex-direction: row; min-height: min(720px, calc(100vh - 190px)); border-radius: var(--radius-lg); }
+.conversationSidebar { width: 228px; flex: 0 0 228px; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--surface-secondary); }
+.conversationSidebarHeader { min-height: 48px; padding: 8px 10px 8px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); color: var(--text-primary); font-size: 12px; }
+.conversationSidebarHeader button { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text-primary); font-size: 18px; line-height: 1; }
+.conversationList { margin: 0; padding: 6px; list-style: none; overflow: auto; }
+.conversationListItem { position: relative; display: flex; align-items: center; min-width: 0; margin-bottom: 2px; border: 1px solid transparent; border-radius: var(--radius-md); }
+.conversationListItem.active { background: var(--surface); border-color: var(--border); }
+.conversationSelect { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 8px; color: var(--text-primary); text-align: left; }
+.conversationSelect span { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.conversationSelect small { color: var(--text-muted); font-size: 10px; }
+.conversationActions { display: flex; gap: 2px; padding-right: 4px; }
+.conversationActions button { padding: 3px 4px; border-radius: var(--radius-sm); color: var(--text-muted); font-size: 10px; }
+.conversationActions button:hover { background: var(--surface-secondary); color: var(--text-primary); }
+.conversationHistoryEmpty, .conversationHistoryError { padding: 12px; font-size: 12px; line-height: 1.45; }
+.conversationHistoryError { color: var(--danger); }
+.chatMain { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.chatMain .chatArea { min-height: 0; }
+.chatMain .chatBottom { flex-shrink: 0; }
+.chatMain .messagesArea { width: min(820px, calc(100% - 40px)); }
+.chatMain .messageBubble { max-width: 100%; border-radius: var(--radius-lg); }
+.chatMain .messageRow.user .messageBubble { border-bottom-right-radius: var(--radius-md); background: var(--surface-secondary); color: var(--text-primary); }
+.chatMain .messageRow.ai .messageBubble { padding: 0; background: transparent; color: var(--text-primary); }
+.chatMain .messageAvatar { width: 26px; height: 26px; border-radius: var(--radius-md); background: var(--surface-secondary); color: var(--text-secondary); }
+.chatMain .aiWelcomeIcon { width: 40px; height: 40px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-secondary); color: var(--text-secondary); }
+.chatMain .aiWelcomeIcon svg { font-size: 20px; }
+.chatMain .chatWelcome h2 { font-size: 20px; }
+.chatMain .sampleQuestions { margin-top: 22px; }
+.chatMain .sampleQuestion { min-height: 42px; padding: 9px 10px; border-radius: var(--radius-md); }
+.chatMain .sampleQuestion svg { display: none; }
+.chatMain .questionInputWrapper { border-radius: var(--radius-lg); }
 .settingsSection { padding: 16px; }
 .settingsNotice, .settingsAccessDenied { border-radius: var(--radius-md); }
 .previewModal { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 8px 32px rgba(31,35,40,.18); }
@@ -214,6 +251,21 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
   .libraryTable { min-width: 760px; }
   .libraryTable th, .libraryTable td { padding: 8px 10px; }
   .tableHeader, .libraryTableHeader { padding: 10px 12px; }
+  .chatContainer { min-height: calc(100vh - 190px); }
+  .conversationSidebar { width: 56px; flex-basis: 56px; overflow: hidden; }
+  .conversationSidebarHeader { justify-content: center; padding: 6px; }
+  .conversationSidebarHeader strong, .conversationSelect span, .conversationSelect small, .conversationActions, .conversationHistoryEmpty { display: none; }
+  .conversationList { width: 56px; padding: 4px; }
+  .conversationSelect { width: 44px; min-height: 36px; padding: 4px; }
+  .conversationListItem { justify-content: center; }
+  .conversationListItem::before { content: ""; display: block; width: 7px; height: 7px; margin: 0 auto; border-radius: 50%; background: var(--text-muted); }
+  .conversationListItem.active::before { background: var(--primary); }
+  .chatMain .chatBottom { padding: 10px; }
+  .chatMain .messagesArea { width: calc(100% - 24px); padding: 18px 0; }
+  .chatMain .sampleQuestionGrid { grid-template-columns: 1fr; }
+  .askQuestionHeader { flex-wrap: wrap; }
+  .chatModeToggle { order: 3; }
+  .providerStatus { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

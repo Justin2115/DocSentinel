@@ -1398,18 +1398,34 @@ def list_documents(
     # --------------------------------------------------------
 
     if file_type:
-        query = query.filter(
-            Document.file_type == file_type
-        )
+        # The UI's type selector uses file extensions (PDF, DOCX, ...), while
+        # uploads persist the browser supplied MIME type. Accept both forms so
+        # filtering happens before count/pagination and remains reliable for
+        # octet-stream uploads.
+        if "/" in file_type:
+            query = query.filter(Document.file_type == file_type)
+        else:
+            extension = file_type.strip().lstrip(".").lower()
+            query = query.filter(
+                func.lower(Document.original_filename).endswith(f".{extension}")
+            )
 
     # --------------------------------------------------------
     # STATUS
     # --------------------------------------------------------
 
     if status:
-        query = query.filter(
-            Document.status == status
-        )
+        normalized_status = status.strip().lower()
+        status_groups = {
+            "processed": ("completed", "approved", "processed"),
+            "needs_review": ("pending_review", "needs_review", "needs_revision", "pending"),
+            "indexed": ("indexed",),
+        }
+        values = status_groups.get(normalized_status)
+        if values:
+            query = query.filter(func.lower(Document.status).in_(values))
+        else:
+            query = query.filter(func.lower(Document.status) == normalized_status)
 
     # --------------------------------------------------------
     # Remove duplicate documents caused by joins

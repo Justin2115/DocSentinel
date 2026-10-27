@@ -8,12 +8,18 @@ import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
 import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 
 import {
-	askQuestion,
+	createConversation,
+	deleteConversation,
+	getConversation,
+	getProviderStatus,
+	listConversations,
+	renameConversation,
 	sourceKindLabels,
+	streamConversationMessage,
 	supportLabels,
 	valueStateLabels,
 } from "../api/query";
-import type { SourceCitation } from "../api/query";
+import type { ConversationSummary, SourceCitation, StoredChatMessage } from "../api/query";
 import { getAllDocuments } from "../api/document";
 import { useAuth } from "../context/AuthContext";
 import type { DocumentRecord } from "../api/document";
@@ -42,6 +48,7 @@ type Message = {
 	hasEvidence?: boolean;
 	notes?: string;
 	engine?: string;
+	status?: "streaming" | "failed" | "interrupted";
 };
 
 // Which code path actually produced the answer. An extractive composition is
@@ -122,95 +129,19 @@ const describeAskFailure = (error: unknown) => {
 	return `The question was rejected (HTTP ${status}).`;
 };
 
-// A reload or an abort stops the request that was in flight, so the last question
-// would otherwise sit unanswered and read as if the documents held nothing.
-const repairInterruptedTurn = (messages: Message[]) => {
-	const last = messages[messages.length - 1];
-	if (!last || last.type !== "user") {
-		return messages;
-	}
-	return [
-		...messages,
-		{
-			type: "ai" as const,
-			text: "That answer was interrupted when the page reloaded. Ask again.",
-			hasEvidence: false,
-		},
-	];
-};
-
-type Conversation = {
-	messages: Message[];
-	scopeIds: number[];
-};
-
-// The conversation belongs to the running app, not to this route: AskQuestion
-// unmounts on every navigation, and a module variable outlives that. sessionStorage
-// mirrors it for a page refresh, and both are dropped when the tab closes, so no
-// chat text is ever written to the database.
-const getChatStorageKey = (userId?: number | null) =>
-	userId ? `docsentinel.chat.v1.user_${userId}` : "docsentinel.chat.v1.anon";
-
-const isAttachment = (value: unknown): value is MessageAttachment => {
-	const attachment = value as Partial<MessageAttachment>;
-	return (
-		typeof attachment?.id === "number" &&
-		typeof attachment?.name === "string" &&
-		typeof attachment?.typeLabel === "string"
-	);
-};
-
-const isMessage = (value: unknown): value is Message => {
-	const message = value as Partial<Message>;
-	if (
-		!(message?.type === "user" || message?.type === "ai") ||
-		typeof message?.text !== "string"
-	) {
-		return false;
-	}
-	if (message.attachments == null) {
-		return true;
-	}
-	return (
-		Array.isArray(message.attachments) &&
-		message.attachments.every(isAttachment)
-	);
-};
-
-const emptyConversation = (): Conversation => ({ messages: [], scopeIds: [] });
-
-const readConversation = (userId?: number | null): Conversation => {
-	try {
-		const key = getChatStorageKey(userId);
-		const raw = sessionStorage.getItem(key);
-		if (!raw) {
-			return emptyConversation();
-		}
-		const stored = JSON.parse(raw) as Partial<Conversation>;
-		const messages = repairInterruptedTurn(
-			Array.isArray(stored.messages) ? stored.messages.filter(isMessage) : []
-		);
-		const scopeIds = Array.isArray(stored.scopeIds)
-			? [...new Set(stored.scopeIds.filter((id) => typeof id === "number"))]
-			: [];
-		return { messages, scopeIds };
-	} catch {
-		return emptyConversation();
-	}
-};
-
-let cachedUserId: number | null | undefined = undefined;
-let conversation: Conversation = emptyConversation();
-
-const persistConversation = (next: Conversation, userId?: number | null) => {
-	conversation = next;
-	cachedUserId = userId;
-	try {
-		const key = getChatStorageKey(userId);
-		sessionStorage.setItem(key, JSON.stringify(next));
-	} catch {
-	}
-};
+const fromStoredMessage = (message: StoredChatMessage): Message => ({
+	type: message.role === "user" ? "user" : "ai",
+	text: message.status === "failed"
+		? message.error_metadata?.message || "The answer could not be generated. Try again."
+		: message.status === "interrupted"
+			? "This answer was interrupted. You can ask again."
+			: message.content,
+	sources: message.citation_metadata || undefined,
+	hasEvidence: message.usage_metadata?.has_evidence,
+	engine: message.model_id || undefined,
+	notes: message.usage_metadata?.notes,
+	status: message.status === "completed" ? undefined : message.status,
+});
 
 // ChatGPT shows a file card, not a row of text: the name identifies the
 // attachment and the type says what kind of document the answer will come from.
@@ -289,43 +220,26 @@ const DocumentFileCard = ({
 const AskQuestion = () => {
 	const { user: currentUser } = useAuth();
 	const currentUserId = currentUser?.id ?? null;
-	const prevUserRef = useRef<number | null>(currentUserId);
 	const [searchParams] = useSearchParams();
 	const navigate = useNavigate();
 	const [question, setQuestion] = useState("");
-
-	const [messages, setMessages] = useState<Message[]>(() => {
-		if (cachedUserId !== currentUserId) {
-			conversation = readConversation(currentUserId);
-			cachedUserId = currentUserId;
-		}
-		return conversation.messages;
-	});
+	const [chatMode, setChatMode] = useState<"documents" | "general">("documents");
+	const [messages, setMessages] = useState<Message[]>([]);
+	const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+	const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+	const [nextBeforeId, setNextBeforeId] = useState<number | null>(null);
+	const [historyLoading, setHistoryLoading] = useState(true);
+	const [historyError, setHistoryError] = useState("");
+	const [providerReady, setProviderReady] = useState<boolean | null>(null);
 	const [isSearching, setIsSearching] = useState(false);
+	const [copyFeedback, setCopyFeedback] = useState<{ index: number; text: string } | null>(null);
 	const processedQuery = useRef<string | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
 	const composerRef = useRef<HTMLInputElement | null>(null);
+	const messagesListRef = useRef<HTMLDivElement | null>(null);
+	const followLatestRef = useRef(true);
 	const [pickerOpen, setPickerOpen] = useState(false);
-	const [scopeIds, setScopeIds] = useState<number[]>(() => {
-		if (cachedUserId !== currentUserId) {
-			conversation = readConversation(currentUserId);
-			cachedUserId = currentUserId;
-		}
-		return conversation.scopeIds;
-	});
-
-	// Reset state immediately if authenticated user switches
-	useEffect(() => {
-		if (prevUserRef.current !== currentUserId) {
-			prevUserRef.current = currentUserId;
-			const userConvo = readConversation(currentUserId);
-			conversation = userConvo;
-			cachedUserId = currentUserId;
-			setMessages(userConvo.messages);
-			setScopeIds(userConvo.scopeIds);
-			setQuestion("");
-		}
-	}, [currentUserId]);
+	const [scopeIds, setScopeIds] = useState<number[]>([]);
 	const [docSearch, setDocSearch] = useState("");
 	const [documents, setDocuments] = useState<DocumentRecord[]>([]);
 	const [docsStatus, setDocsStatus] = useState<
@@ -333,6 +247,66 @@ const AskQuestion = () => {
 	>("loading");
 	const [docsError, setDocsError] = useState("");
 	const docsFetched = useRef(false);
+
+	const openConversation = async (id: string) => {
+		abortRef.current?.abort();
+		setIsSearching(false);
+		setActiveConversationId(id);
+		setMessages([]);
+		setHistoryError("");
+		try {
+			const response = await getConversation(id);
+			setMessages(response.data.messages.map(fromStoredMessage));
+			setNextBeforeId(response.data.next_before_id);
+			setChatMode(response.data.chat_mode);
+			const latestPrompt = [...response.data.messages].reverse().find((message) => message.role === "user");
+			setScopeIds(latestPrompt?.request_metadata?.document_ids ?? []);
+			setConversations((current) => [
+				response.data,
+				...current.filter((item) => item.id !== id),
+			]);
+		} catch {
+			setHistoryError("This conversation could not be loaded. Refresh the history and try again.");
+			setActiveConversationId(null);
+		}
+	};
+
+	const loadOlderMessages = async () => {
+		if (!activeConversationId || nextBeforeId == null) return;
+		try {
+			const { data } = await getConversation(activeConversationId, 50, nextBeforeId);
+			setMessages((current) => [...data.messages.map(fromStoredMessage), ...current]);
+			setNextBeforeId(data.next_before_id);
+		} catch {
+			setHistoryError("Older messages could not be loaded.");
+		}
+	};
+
+	useEffect(() => {
+		let cancelled = false;
+		setHistoryLoading(true);
+		setHistoryError("");
+		void listConversations().then(async ({ data }) => {
+			if (cancelled) return;
+			setConversations(data);
+			if (data[0]) await openConversation(data[0].id);
+		}).catch(() => {
+			if (!cancelled) setHistoryError("Conversation history is unavailable. Try refreshing.");
+		}).finally(() => {
+			if (!cancelled) setHistoryLoading(false);
+		});
+		return () => { cancelled = true; };
+	}, [currentUserId]);
+
+	useEffect(() => {
+		let cancelled = false;
+		void getProviderStatus().then(({ data }) => {
+			if (!cancelled) setProviderReady(data.enabled && data.reachable && data.model_installed);
+		}).catch(() => {
+			if (!cancelled) setProviderReady(false);
+		});
+		return () => { cancelled = true; };
+	}, [currentUserId]);
 
 	const loadDocuments = async () => {
 		setDocsStatus("loading");
@@ -389,12 +363,6 @@ const AskQuestion = () => {
 		void loadDocuments();
 	}, [scopeIds]);
 
-	// Written on every change: switching views keeps the turns and their scope in
-	// the module store, and a refresh reads them back from sessionStorage.
-	useEffect(() => {
-		persistConversation({ messages, scopeIds }, currentUserId);
-	}, [messages, scopeIds]);
-
 	const filteredDocuments = useMemo(() => {
 		const needle = docSearch.trim().toLowerCase();
 		if (needle.length === 0) {
@@ -423,21 +391,16 @@ const AskQuestion = () => {
 		scopeIds.includes(document.id)
 	);
 
+	useEffect(() => {
+		if (followLatestRef.current && messagesListRef.current) {
+			messagesListRef.current.scrollTop = messagesListRef.current.scrollHeight;
+		}
+	}, [messages]);
+
 
 	// Navigating away cancels an in-flight question instead of leaving the local
 	// model generating for a page that is already gone.
 	useEffect(() => () => abortRef.current?.abort(), []);
-
-	// The turns the server keeps as wording context. The current question is not
-	// included and an answer without evidence is not repeated back as if it were.
-	const historyForRequest = (previous: Message[]) =>
-		previous
-			.filter((message) => message.text.trim().length > 0)
-			.slice(-8)
-			.map((message) => ({
-				role: message.type === "user" ? "user" : "assistant",
-				content: message.text,
-			}));
 
 	const runAskQuestion = async (query: string) => {
 		if (isSearching) {
@@ -445,7 +408,19 @@ const AskQuestion = () => {
 		}
 
 		setIsSearching(true);
-		const previous = messages;
+		let targetConversationId = activeConversationId;
+		if (!targetConversationId) {
+			try {
+				const created = await createConversation(undefined, chatMode);
+				targetConversationId = created.data.id;
+				setActiveConversationId(created.data.id);
+				setConversations((current) => [created.data, ...current]);
+			} catch {
+				setHistoryError("A new conversation could not be created. Try again.");
+				setIsSearching(false);
+				return;
+			}
+		}
 		const namedById = new Map<number, MessageAttachment>();
 		for (const message of messages) {
 			for (const attachment of message.attachments ?? []) {
@@ -474,6 +449,7 @@ const AskQuestion = () => {
 				text: query,
 				attachments: attachments.length > 0 ? attachments : undefined,
 			},
+			{ type: "ai", text: "", hasEvidence: false, status: "streaming" },
 		]);
 		setQuestion("");
 
@@ -481,46 +457,69 @@ const AskQuestion = () => {
 		// page, or pressing Stop, cancels the request instead of orphaning it.
 		const controller = new AbortController();
 		abortRef.current = controller;
+		let streamReportedError = false;
 
 		try {
-			const response = await askQuestion(
-				{
-					question: query,
-					// An empty scope must stay absent so the server searches the whole
-					// authorized library instead of nothing.
-					document_ids: scopeIds.length > 0 ? scopeIds : undefined,
-					history: historyForRequest(previous),
+			await streamConversationMessage(
+				targetConversationId,
+				query,
+				scopeIds.length > 0 ? scopeIds : undefined,
+				crypto.randomUUID(),
+				chatMode,
+				controller.signal,
+				(event) => {
+					if (event.type === "delta") {
+						const delta = String(event.data.text ?? "");
+						setMessages((current) => current.map((message, index) =>
+							index === current.length - 1 && message.status === "streaming"
+								? { ...message, text: message.text + delta }
+								: message
+						));
+					} else if (event.type === "complete") {
+						const stored = event.data.message as StoredChatMessage;
+						const completed = fromStoredMessage(stored);
+						completed.notes = typeof event.data.notes === "string" ? event.data.notes : undefined;
+						setMessages((current) => current.map((message, index) =>
+							index === current.length - 1 ? completed : message
+						));
+						setConversations((current) => current.map((item) =>
+							item.id === targetConversationId
+								? { ...item, title: item.title === "New conversation" ? query.slice(0, 120) : item.title, updated_at: new Date().toISOString() }
+								: item
+						));
+					} else if (event.type === "error") {
+						streamReportedError = true;
+						const messageText = String(event.data.message ?? "The answer could not be generated. Try again.");
+						setMessages((current) => current.map((message, index) =>
+							index === current.length - 1 ? { ...message, text: messageText, status: "failed" } : message
+						));
+					}
 				},
-				controller.signal
 			);
-			const { answer, sources, has_evidence, notes, engine } =
-				response.data;
-			setMessages((current) => [
-				...current,
-				{
-					type: "ai",
-					text: answer,
-					sources,
-					hasEvidence: has_evidence,
-					notes,
-					engine,
-				},
-			]);
 		} catch (error) {
-			const stopped = isRequestCanceled(error);
-			setMessages((current) => [
-				...current,
-				{
-					type: "ai",
-					text: stopped
-						? "Stopped. Nothing was added to this conversation."
-						: describeAskFailure(error),
-					hasEvidence: false,
-				},
-			]);
+			if (!streamReportedError) {
+				const stopped = isRequestCanceled(error);
+				setMessages((current) => current.map((message, index) =>
+					index === current.length - 1
+						? { ...message, text: stopped ? "Generation stopped." : describeAskFailure(error), status: stopped ? "interrupted" : "failed" }
+						: message
+				));
+			}
 		} finally {
 			abortRef.current = null;
 			setIsSearching(false);
+		}
+	};
+
+	const copyAnswer = async (text: string, index: number) => {
+		try {
+			if (!navigator.clipboard?.writeText) {
+				throw new Error("Clipboard access is unavailable");
+			}
+			await navigator.clipboard.writeText(text);
+			setCopyFeedback({ index, text: "Copied" });
+		} catch {
+			setCopyFeedback({ index, text: "Clipboard access unavailable" });
 		}
 	};
 
@@ -530,10 +529,46 @@ const AskQuestion = () => {
 	// way it is cleared - and it also releases the document scope.
 	const newConversation = () => {
 		abortRef.current?.abort();
-		persistConversation(emptyConversation(), currentUserId);
-		setMessages([]);
-		setScopeIds([]);
-		composerRef.current?.focus();
+		setIsSearching(false);
+		void createConversation(undefined, chatMode).then(({ data }) => {
+			setActiveConversationId(data.id);
+			setChatMode(data.chat_mode);
+			setConversations((current) => [data, ...current]);
+			setMessages([]);
+			setScopeIds([]);
+		setNextBeforeId(null);
+			setHistoryError("");
+			composerRef.current?.focus();
+		}).catch(() => setHistoryError("A new conversation could not be created. Try again."));
+	};
+
+	const renameSelectedConversation = async (item: ConversationSummary) => {
+		const title = window.prompt("Rename conversation", item.title);
+		if (title == null || !title.trim()) return;
+		try {
+			const { data } = await renameConversation(item.id, title.trim());
+			setConversations((current) => current.map((entry) => entry.id === data.id ? data : entry));
+		} catch {
+			setHistoryError("The conversation title could not be saved.");
+		}
+	};
+
+	const removeConversation = async (item: ConversationSummary) => {
+		if (!window.confirm(`Delete “${item.title}” and its messages? This cannot be undone.`)) return;
+		try {
+			await deleteConversation(item.id);
+			const remaining = conversations.filter((entry) => entry.id !== item.id);
+			setConversations(remaining);
+			if (activeConversationId === item.id) {
+				setActiveConversationId(null);
+				setMessages([]);
+				setScopeIds([]);
+				setNextBeforeId(null);
+				if (remaining[0]) void openConversation(remaining[0].id);
+			}
+		} catch {
+			setHistoryError("The conversation could not be deleted.");
+		}
 	};
 
 	useEffect(() => {
@@ -557,10 +592,12 @@ const AskQuestion = () => {
 		<div className="askQuestionPage">
 			<div className="askQuestionHeader" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
 				<div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-					<span style={{ fontSize: "0.95rem", color: "#64748b", fontWeight: 500 }}>
-						Document Intelligence Chat
-					</span>
-					{scopeIds.length > 0 && (
+					<strong style={{ fontSize: "1rem", fontWeight: 600 }}>Ask DocSentinel</strong>
+					<div className="chatModeToggle" role="group" aria-label="Answer mode">
+						<button type="button" className={chatMode === "documents" ? "active" : ""} aria-pressed={chatMode === "documents"} onClick={() => setChatMode("documents")}>Your documents</button>
+						<button type="button" className={chatMode === "general" ? "active" : ""} aria-pressed={chatMode === "general"} onClick={() => setChatMode("general")}>General</button>
+					</div>
+					{chatMode === "documents" && scopeIds.length > 0 && (
 						<span style={{
 							fontSize: "0.75rem",
 							padding: "3px 10px",
@@ -573,18 +610,49 @@ const AskQuestion = () => {
 						</span>
 					)}
 				</div>
+				<span className={providerReady === true ? "providerStatus ready" : "providerStatus"} role="status" title={providerReady === true ? "The configured local model is available." : "The configured local model is currently unavailable."}>
+					{providerReady === null ? "Checking model…" : providerReady ? "Local model ready" : "Local model unavailable"}
+				</span>
 				<button
 					type="button"
 					className="newConversationButton"
 					onClick={newConversation}
-					disabled={messages.length === 0}
-					title="Clear this conversation and search every document again."
+					disabled={isSearching}
+					title="Start a new conversation."
 				>
 					New conversation
 				</button>
 			</div>
 
 			<div className="chatContainer">
+				<aside className="conversationSidebar" aria-label="Conversation history">
+					<div className="conversationSidebarHeader">
+						<strong>Recent conversations</strong>
+						<button type="button" onClick={newConversation} aria-label="Start a new conversation" title="Start a new conversation">+</button>
+					</div>
+					{historyError && <p className="conversationHistoryError" role="alert">{historyError}</p>}
+					{historyLoading ? (
+						<p className="conversationHistoryEmpty" role="status">Loading conversations…</p>
+					) : conversations.length === 0 ? (
+						<p className="conversationHistoryEmpty">Your conversations will appear here.</p>
+					) : (
+						<ul className="conversationList">
+							{conversations.map((item) => (
+								<li key={item.id} className={item.id === activeConversationId ? "conversationListItem active" : "conversationListItem"}>
+										<button type="button" className="conversationSelect" aria-label={item.title} onClick={() => void openConversation(item.id)} aria-current={item.id === activeConversationId ? "page" : undefined}>
+										<span>{item.title}</span>
+										<small>{new Date(item.updated_at).toLocaleDateString()}</small>
+									</button>
+									<div className="conversationActions">
+										<button type="button" onClick={() => void renameSelectedConversation(item)} aria-label={`Rename ${item.title}`} title="Rename">Rename</button>
+										<button type="button" onClick={() => void removeConversation(item)} aria-label={`Delete ${item.title}`} title="Delete">Delete</button>
+									</div>
+								</li>
+							))}
+						</ul>
+					)}
+				</aside>
+				<div className="chatMain">
 				<div className="chatArea">
 					{messages.length === 0 ? (
 						<div className="chatWelcome">
@@ -592,11 +660,7 @@ const AskQuestion = () => {
 								<AutoAwesomeOutlinedIcon />
 							</div>
 							<h2>Ask DocSentinel</h2>
-							<p>
-								Search across your documents using natural language.
-								<br />
-								I'll retrieve the most relevant passages.
-							</p>
+							<p>{chatMode === "documents" ? "Ask about documents you can access. Answers are grounded in retrieved passages and link back to their sources." : "Ask a general question. This mode does not search your document library."}</p>
 							<div className="sampleQuestions">
 								<span className="sampleQuestionsTitle">Try asking</span>
 								<div className="sampleQuestionGrid">
@@ -617,10 +681,16 @@ const AskQuestion = () => {
 					) : (
 						<div
 							className="messagesArea"
+							ref={messagesListRef}
+							onScroll={(event) => {
+								const node = event.currentTarget;
+								followLatestRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 100;
+							}}
 							role="log"
 							aria-live="polite"
 							aria-label="Conversation"
 						>
+							{nextBeforeId != null && <button type="button" className="loadOlderMessages" onClick={() => void loadOlderMessages()}>Load earlier messages</button>}
 							{messages.map((message, index) => (
 								<div
 									key={`${message.type}-${index}`}
@@ -648,8 +718,8 @@ const AskQuestion = () => {
 													))}
 												</div>
 											)}
-										<div className="messageBubble" style={{ whiteSpace: "pre-wrap" }}>
-											{message.text}
+						<div className="messageBubble" style={{ whiteSpace: "pre-wrap" }}>
+																{message.text || (message.status === "streaming" ? (chatMode === "documents" ? "Retrieving authorized passages and waiting for verified text…" : "Waiting for the local model…") : "")}
 										</div>
 										{message.type === "ai" && message.engine && (
 											<span className="answerEngine">
@@ -658,6 +728,22 @@ const AskQuestion = () => {
 										)}
 										{message.notes && (
 											<span className="answerNotes">{message.notes}</span>
+										)}
+										{message.type === "ai" && message.status !== "streaming" && message.status !== "failed" && message.text && (
+												<>
+													<button type="button" className="messageAction" onClick={() => void copyAnswer(message.text, index)} aria-label="Copy answer">
+														{copyFeedback?.index === index && copyFeedback.text === "Copied" ? "Copied" : "Copy"}
+													</button>
+													{copyFeedback?.index === index && copyFeedback.text !== "Copied" && (
+														<span role="status" className="answerNotes">{copyFeedback.text}</span>
+													)}
+												</>
+										)}
+										{message.type === "ai" && message.status === "failed" && (
+											<button type="button" className="messageAction" onClick={() => {
+												const previousQuestion = [...messages.slice(0, index)].reverse().find((entry) => entry.type === "user")?.text;
+												if (previousQuestion) void runAskQuestion(previousQuestion);
+											}} disabled={isSearching}>Try again</button>
 										)}
 										{message.type === "ai" && message.hasEvidence && (
 											<button
@@ -756,27 +842,12 @@ const AskQuestion = () => {
 									</div>
 								</div>
 							))}
-							{isSearching && (
-								<div className="messageRow ai">
-									<div className="messageAvatar">
-										<AutoAwesomeOutlinedIcon />
-									</div>
-									<div
-										className="messageBubble"
-										role="status"
-										aria-live="polite"
-										aria-atomic="true"
-									>
-										Searching your documents and checking the evidence...
-									</div>
-								</div>
-							)}
 						</div>
 					)}
 				</div>
 
 				<div className="chatBottom">
-					{pickerOpen && (
+					{chatMode === "documents" && pickerOpen && (
 						<div
 							id="docSelector"
 							className="docSelector"
@@ -871,7 +942,9 @@ const AskQuestion = () => {
 						</div>
 						</div>
 					)}
-					{scopeIds.length === 0 ? (
+					{chatMode === "general" ? (
+						<div className="selectedDocument"><span>General question · documents are not searched</span></div>
+					) : scopeIds.length === 0 ? (
 						<div className="selectedDocument">
 							<DescriptionOutlinedIcon />
 							<span>All documents</span>
@@ -904,7 +977,7 @@ const AskQuestion = () => {
 						</div>
 					)}
 					<div className="questionInputWrapper">
-						<button
+						{chatMode === "documents" && <button
 							type="button"
 							className="attachButton"
 							aria-label="Choose documents to search"
@@ -914,7 +987,7 @@ const AskQuestion = () => {
 							onClick={() => setPickerOpen((open) => !open)}
 						>
 						<AddOutlinedIcon />
-						</button>
+						</button>}
 						<label className="srOnly" htmlFor="questionInput">
 							Ask a question about your documents
 						</label>
@@ -929,7 +1002,7 @@ const AskQuestion = () => {
 									handleSend();
 								}
 							}}
-							placeholder="Ask anything about your documents..."
+							placeholder={chatMode === "documents" ? "Ask anything about your documents..." : "Ask a general question..."}
 							aria-label="Ask a question about your documents"
 							aria-busy={isSearching}
 							aria-describedby="askDisclaimer"
@@ -956,8 +1029,9 @@ const AskQuestion = () => {
 						)}
 					</div>
 					<span className="aiDisclaimer" id="askDisclaimer">
-						Answers are grounded strictly in authorized document passages. Verify important information.
+						{chatMode === "documents" ? "Answers use authorized document evidence. Check cited sources before acting." : "General answers are generated by the configured local model and may need verification."}
 					</span>
+				</div>
 				</div>
 			</div>
 		</div>

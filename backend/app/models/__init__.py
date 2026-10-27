@@ -1,4 +1,5 @@
 from app.models.audit import ActivityLog
+from app.models.conversation import Conversation, ConversationMessage
 from app.models.document import (
     Document,
     DocumentPage,
@@ -13,6 +14,8 @@ from app.models.workflow import WorkflowRule, WorkflowSetting
 
 __all__ = [
     "ActivityLog",
+    "Conversation",
+    "ConversationMessage",
     "Document",
     "DocumentPage",
     "OCRResult",

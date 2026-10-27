@@ -289,3 +289,80 @@ def test_checker_only_lists_assigned_documents(client):
 
     assert body["total"] == len(assigned)
     assert {item["id"] for item in body["items"]} == set(assigned)
+
+
+def test_file_extension_filter_is_applied_before_pagination(client):
+    db = SessionLocal()
+    try:
+        headers = _headers(db, "extension-filter-admin@docsentinel.test", "ADMIN")
+        for filename, content_type in [
+            ("first.xlsx", "application/octet-stream"),
+            ("second.XLSX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            ("other.pdf", "application/pdf"),
+        ]:
+            db.add(Document(
+                original_filename=filename,
+                stored_filename=filename,
+                file_path=f"uploads/{filename}",
+                file_type=content_type,
+                file_size=1024,
+                status="indexed",
+                department="LEGAL",
+                uploaded_at=FIXED_UPLOAD_TIME,
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(
+        "/api/documents",
+        params={"file_type": "xlsx", "skip": 0, "limit": 1},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+    assert len(response.json()["items"]) == 1
+    assert response.json()["items"][0]["original_filename"].lower().endswith(".xlsx")
+
+    mime_response = client.get(
+        "/api/documents", params={"file_type": "application/pdf"}, headers=headers
+    )
+    assert mime_response.status_code == 200
+    assert mime_response.json()["total"] == 1
+
+
+@pytest.mark.parametrize(
+    ("filter_status", "stored_statuses"),
+    [
+        ("processed", ["completed", "APPROVED"]),
+        ("needs_review", ["PENDING_REVIEW", "NEEDS_REVISION"]),
+        ("indexed", ["INDEXED"]),
+    ],
+)
+def test_status_category_filters_match_stored_workflow_statuses(client, filter_status, stored_statuses):
+    db = SessionLocal()
+    try:
+        headers = _headers(db, f"status-filter-{filter_status}@docsentinel.test", "ADMIN")
+        for index, status in enumerate(stored_statuses):
+            filename = f"{filter_status}-{index}.pdf"
+            db.add(Document(
+                original_filename=filename,
+                stored_filename=filename,
+                file_path=f"uploads/{filename}",
+                file_type="application/pdf",
+                file_size=1024,
+                status=status,
+                department="LEGAL",
+                uploaded_at=FIXED_UPLOAD_TIME,
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(
+        "/api/documents", params={"status": filter_status}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == len(stored_statuses)

@@ -44,4 +44,5 @@ class ChatQueryResponse(BaseModel):
     question: str
     has_evidence: bool = True
     engine: str = "extractive_fallback"
+    model_id: Optional[str] = None
     notes: Optional[str] = None

@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from typing import Any, Iterable, Optional, Sequence
 
 from sqlalchemy.orm import Session
@@ -785,6 +786,7 @@ def _try_local_llm(
     plan: Any,
     units: list[Any],
     history: list[dict[str, str]] | None = None,
+    on_delta: Any | None = None,
 ) -> Optional[ChatQueryResponse]:
     """Ground one answer in the local Ollama model, or return None.
 
@@ -802,7 +804,37 @@ def _try_local_llm(
         return None
 
     blocks = [unit.evidence_block(index) for index, unit in enumerate(units[:6], 1)]
-    result = llm_service.generate_answer(question, blocks, history)
+    safe_sentence_buffer = ""
+    def accept_model_delta(delta: str) -> None:
+        nonlocal safe_sentence_buffer
+        if on_delta is None:
+            return
+        # Poll the transport's disconnect/cancel guard for every generated chunk,
+        # even while a sentence is still being checked and withheld from the UI.
+        on_delta("")
+        safe_sentence_buffer += delta
+        # Only release a complete sentence after it independently passes the
+        # same evidence, numeric, and name checks used for the final response.
+        while True:
+            match = re.search(r"(?<=[.!?।॥])\s+", safe_sentence_buffer)
+            if not match:
+                break
+            candidate = safe_sentence_buffer[:match.end()].strip()
+            safe_sentence_buffer = safe_sentence_buffer[match.end():]
+            if (
+                candidate
+                and llm_service.verify_quotes(candidate, blocks)
+                and _numbers_supported_by_evidence(candidate, [{"snippet": unit.text} for unit in units[:6]])
+                and _names_supported_by_evidence(candidate, units[:6], question)
+            ):
+                on_delta(candidate + " ")
+
+    result = llm_service.generate_answer(
+        question,
+        blocks,
+        history,
+        on_delta=accept_model_delta if on_delta is not None else None,
+    )
     if result is None:
         return None
 
@@ -820,6 +852,15 @@ def _try_local_llm(
         logger.info("Local model produced a name absent from the evidence; discarding")
         return None
 
+    if on_delta is not None and safe_sentence_buffer.strip():
+        candidate = safe_sentence_buffer.strip()
+        if (
+            llm_service.verify_quotes(candidate, blocks)
+            and _numbers_supported_by_evidence(candidate, [{"snippet": unit.text} for unit in units[:6]])
+            and _names_supported_by_evidence(candidate, units[:6], question)
+        ):
+            on_delta(candidate)
+
     return ChatQueryResponse(
         answer=result.text,
         sources=_citations(used_units or units[:3], plan),
@@ -827,6 +868,7 @@ def _try_local_llm(
         question=question,
         has_evidence=True,
         engine="llm_ollama",
+        model_id=result.model,
         notes=(
             f"Generated locally by {result.model} from the cited passages only; "
             "no document content left this machine."
@@ -840,11 +882,13 @@ def _answer_single_part(
     user: Any | None,
     allowed_ids: list[int],
     history: list[dict[str, str]] | None = None,
+    on_delta: Any | None = None,
 ) -> ChatQueryResponse:
     """Retrieve, generate and package the answer for one single-part question."""
     from app.services import evidence_service as ev
 
     history = history or []
+    retrieval_started = time.perf_counter()
     plan = ev.build_query_plan(question)
     anchored = [] if allowed_ids else ev.resolve_document_scope(db, question, user)
     units, diagnostics = ev.collect_evidence(
@@ -854,6 +898,10 @@ def _answer_single_part(
         document_ids=allowed_ids or None,
         anchored_ids=anchored,
         max_units=24,
+    )
+    logger.info(
+        "chat retrieval complete duration_ms=%s evidence_units=%s",
+        int((time.perf_counter() - retrieval_started) * 1000), len(units),
     )
 
     # An elliptical follow-up ("and the due date?") carries no wording of its own
@@ -874,6 +922,10 @@ def _answer_single_part(
             )
             if carry_units:
                 plan, units, carried_from = carry_plan, carry_units, prior
+                logger.info(
+                    "chat follow-up retrieval complete duration_ms=%s evidence_units=%s",
+                    int((time.perf_counter() - retrieval_started) * 1000), len(units),
+                )
 
     carry_note = (
         " Retrieval also used the wording of your earlier question "
@@ -914,7 +966,7 @@ def _answer_single_part(
     llm_attempted = False
     if plan.value_kind is None and not plan.table_intent and not plan.aggregate:
         llm_attempted = True
-        llm_response = _try_local_llm(question, plan, units, history)
+        llm_response = _try_local_llm(question, plan, units, history, on_delta)
         if llm_response is not None:
             if context_note:
                 llm_response.notes = (llm_response.notes or "") + context_note
@@ -951,7 +1003,7 @@ def _answer_single_part(
     # Reuse the attempt above when there was one: the model, the passages and the
     # gate are identical, so a rejected answer must not cost a second inference.
     if not llm_attempted:
-        llm_response = _try_local_llm(question, plan, units, history)
+        llm_response = _try_local_llm(question, plan, units, history, on_delta)
     if llm_response is not None:
         if context_note:
             llm_response.notes = (llm_response.notes or "") + context_note
@@ -1052,6 +1104,7 @@ def answer_question(
     db: Session,
     request: ChatQueryRequest,
     user: Any | None = None,
+    on_delta: Any | None = None,
 ) -> ChatQueryResponse:
     """Answer from authorized OCR evidence: hybrid retrieval, then generation."""
     from app.services import evidence_service as ev
@@ -1111,7 +1164,7 @@ def answer_question(
         )
 
     return _enforce_scope(
-        _answer_single_part(db, clean_q, user, allowed, history), allowed
+        _answer_single_part(db, clean_q, user, allowed, history, on_delta), allowed
     )
 
 

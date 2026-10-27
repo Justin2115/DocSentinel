@@ -1342,7 +1342,7 @@ export default function Admin() {
 						)}
 					</DialogContent>
 					<DialogActions sx={{ p: 2 }}>
-						<Button onClick={() => setInviteOpen(false)} sx={{ color: "var(--text-secondary, #9ca3af)" }}>
+						<Button type="button" onClick={() => setInviteOpen(false)} sx={{ color: "var(--text-secondary, #9ca3af)" }}>
 							Cancel
 						</Button>
 						<Button
