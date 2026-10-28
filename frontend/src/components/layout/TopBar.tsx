@@ -86,22 +86,26 @@ export default function TopBar() {
 
   return (
     <header className="topbar">
-      <div className="searchBox">
-        <SearchIcon />
+      <form
+        className="searchBox"
+        role="search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          handleSearch();
+        }}
+      >
+        <button className="searchSubmit" type="submit" aria-label="Search documents">
+          <SearchIcon />
+        </button>
 
         <input
           type="text"
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              handleSearch();
-            }
-          }}
           placeholder="Ask about any document..."
           aria-label="Ask about any document"
         />
-      </div>
+      </form>
 
       <div className="topbarRight">
         <div className="profileWrapper" ref={dropdownRef}>

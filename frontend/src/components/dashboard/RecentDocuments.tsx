@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import StatusBadge from "./StatusBadge";
 import { getDashboardStats } from "../../api/document";
+import { dashboardStatusLabel } from "../../utils/documentStatus";
 
 const formatDate = (date: string | null) => date ? new Date(date).toLocaleDateString() : "--";
-const displayStatus = (status: string | null): "Processed" | "Needs review" | "Indexed" =>
-  status === "needs_review" ? "Needs review" : status === "completed" ? "Processed" : "Indexed";
 
 export default function RecentDocuments() {
   const [documents, setDocuments] = useState<Awaited<ReturnType<typeof getDashboardStats>>["data"]["recent_documents"]>([]);
@@ -27,6 +26,7 @@ export default function RecentDocuments() {
       </div>
 
       <table>
+        <caption className="srOnly">The five most recently uploaded documents visible to your account</caption>
 
         <thead>
 
@@ -55,9 +55,7 @@ export default function RecentDocuments() {
 
               <td>
                 <StatusBadge
-                  status={
-                    displayStatus(doc.status)
-                  }
+                  status={dashboardStatusLabel(doc.status)}
                 />
               </td>
 

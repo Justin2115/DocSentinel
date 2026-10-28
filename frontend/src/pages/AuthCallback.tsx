@@ -7,7 +7,11 @@ export default function AuthCallback() {
 	const [searchParams] = useSearchParams();
 	const navigate = useNavigate();
 	const { login } = useAuth();
-	const [statusText, setStatusText] = useState("Authenticating with Google...");
+	const [statusText] = useState(() =>
+		searchParams.get("token")
+			? "Setting up your session..."
+			: "Authenticating with Google..."
+	);
 
 	useEffect(() => {
 		const token = searchParams.get("token");
@@ -19,7 +23,6 @@ export default function AuthCallback() {
 		}
 
 		if (token) {
-			setStatusText("Setting up your session...");
 			login(token)
 				.then(() => {
 					navigate("/dashboard", { replace: true });
@@ -34,22 +37,10 @@ export default function AuthCallback() {
 	}, [searchParams, login, navigate]);
 
 	return (
-		<div
-			style={{
-				width: "100vw",
-				height: "100vh",
-				display: "flex",
-				flexDirection: "column",
-				alignItems: "center",
-				justifyContent: "center",
-				background: "var(--bg, #0f1015)",
-				color: "var(--text-h, #ffffff)",
-				gap: "20px",
-			}}
-		>
-			<CircularProgress sx={{ color: "var(--accent, #a855f7)" }} size={48} />
+		<div className="authCallbackPage" role="status" aria-live="polite">
+			<CircularProgress size={48} />
 			<h3 style={{ margin: 0, fontWeight: 500 }}>{statusText}</h3>
-			<p style={{ color: "var(--text, #9ca3af)", fontSize: "14px" }}>
+			<p>
 				Please wait while we complete your sign-in to DocSentinel.
 			</p>
 		</div>

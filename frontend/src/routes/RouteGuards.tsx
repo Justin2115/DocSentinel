@@ -16,10 +16,10 @@ export const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ chi
 					display: "flex",
 					alignItems: "center",
 					justifyContent: "center",
-					background: "var(--bg, #0f1015)",
+				background: "var(--background)",
 				}}
 			>
-				<CircularProgress size={40} sx={{ color: "var(--accent, #a855f7)" }} />
+			<CircularProgress size={40} sx={{ color: "var(--primary)" }} />
 			</Box>
 		);
 	}
@@ -44,10 +44,10 @@ export const AdminRoute: React.FC<{ children: React.ReactElement }> = ({ childre
 					display: "flex",
 					alignItems: "center",
 					justifyContent: "center",
-					background: "var(--bg, #0f1015)",
+				background: "var(--background)",
 				}}
 			>
-				<CircularProgress size={40} sx={{ color: "var(--accent, #a855f7)" }} />
+			<CircularProgress size={40} sx={{ color: "var(--primary)" }} />
 			</Box>
 		);
 	}
@@ -77,10 +77,10 @@ export const MakerRoute: React.FC<{ children: React.ReactElement }> = ({ childre
 					display: "flex",
 					alignItems: "center",
 					justifyContent: "center",
-					background: "var(--bg, #0f1015)",
+				background: "var(--background)",
 				}}
 			>
-				<CircularProgress size={40} sx={{ color: "var(--accent, #a855f7)" }} />
+			<CircularProgress size={40} sx={{ color: "var(--primary)" }} />
 			</Box>
 		);
 	}
@@ -109,10 +109,10 @@ export const CheckerRoute: React.FC<{ children: React.ReactElement }> = ({ child
 					display: "flex",
 					alignItems: "center",
 					justifyContent: "center",
-					background: "var(--bg, #0f1015)",
+				background: "var(--background)",
 				}}
 			>
-				<CircularProgress size={40} sx={{ color: "var(--accent, #a855f7)" }} />
+			<CircularProgress size={40} sx={{ color: "var(--primary)" }} />
 			</Box>
 		);
 	}
@@ -142,10 +142,10 @@ export const SuperAdminRoute: React.FC<{ children: React.ReactElement }> = ({ ch
 					display: "flex",
 					alignItems: "center",
 					justifyContent: "center",
-					background: "var(--bg, #0f1015)",
+				background: "var(--background)",
 				}}
 			>
-				<CircularProgress size={40} sx={{ color: "var(--accent, #a855f7)" }} />
+			<CircularProgress size={40} sx={{ color: "var(--primary)" }} />
 			</Box>
 		);
 	}

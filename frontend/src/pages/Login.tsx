@@ -6,6 +6,7 @@ import {
 	InputAdornment,
 	Typography,
 } from "@mui/material";
+import { isAxiosError } from "axios";
 import Visibility from "@mui/icons-material/Visibility";
 import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import SecurityIcon from "@mui/icons-material/Security";
@@ -15,6 +16,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import Card from "../components/common/Card";
 import Button from "../components/common/Button";
 import Input from "../components/common/Input";
+import ThemeSwitcher from "../components/common/ThemeSwitcher";
 import { adminLogin, getGoogleAuthUrl } from "../api/auth";
 import { useAuth } from "../context/AuthContext";
 
@@ -49,7 +51,9 @@ const Login = () => {
 	const [showPassword, setShowPassword] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [googleLoading, setGoogleLoading] = useState(false);
-	const [errorMessage, setErrorMessage] = useState<string | null>(null);
+	const [errorMessage, setErrorMessage] = useState<string | null>(
+		() => searchParams.get("error")
+	);
 
 	// Check if already authenticated
 	useEffect(() => {
@@ -58,24 +62,18 @@ const Login = () => {
 		}
 	}, [isAuthenticated, authLoading, navigate]);
 
-	// Extract query parameter errors (e.g. from Google OAuth callback failure)
-	useEffect(() => {
-		const errorParam = searchParams.get("error");
-		if (errorParam) {
-			setErrorMessage(errorParam);
-		}
-	}, [searchParams]);
-
 	const handleGoogleLogin = async () => {
 		try {
 			setGoogleLoading(true);
 			setErrorMessage(null);
 			const authUrl = await getGoogleAuthUrl();
 			window.location.href = authUrl;
-		} catch (err: any) {
+		} catch (err: unknown) {
 			console.error("Failed to initiate Google OAuth:", err);
 			const detail =
-				err.response?.data?.detail || "Google login service is currently unavailable.";
+				isAxiosError<{ detail?: string }>(err) && err.response?.data?.detail
+					? err.response.data.detail
+					: "Google login service is currently unavailable.";
 			setErrorMessage(detail);
 			setGoogleLoading(false);
 		}
@@ -98,10 +96,12 @@ const Login = () => {
 
 			await login(data.access_token, data.user);
 			navigate("/dashboard", { replace: true });
-		} catch (err: any) {
+		} catch (err: unknown) {
 			console.error("Admin login error:", err);
 			const detail =
-				err.response?.data?.detail || "Invalid credentials. Please verify and try again.";
+				isAxiosError<{ detail?: string }>(err) && err.response?.data?.detail
+					? err.response.data.detail
+					: "Invalid credentials. Please verify and try again.";
 			setErrorMessage(detail);
 		} finally {
 			setLoading(false);
@@ -113,6 +113,9 @@ const Login = () => {
 			<Box sx={{ width: "100%", maxWidth: 440 }}>
 				<Card>
 					<Box sx={{ p: { xs: 2, sm: 3 } }}>
+						<Box sx={{ display: "flex", justifyContent: "flex-end", mb: 2 }}>
+							<ThemeSwitcher />
+						</Box>
 						{/* Brand & Title */}
 						<Box sx={{ textAlign: "center", mb: 3 }}>
 							<Box
@@ -121,7 +124,7 @@ const Login = () => {
 									width: 48,
 									height: 48,
 									borderRadius: "8px",
-									background: "#1f2328",
+									background: "var(--primary)",
 									color: "#fff",
 									fontWeight: 700,
 									fontSize: 24,
@@ -139,16 +142,16 @@ const Login = () => {
 								sx={{
 									fontWeight: 700,
 									letterSpacing: "-0.5px",
-								color: "var(--text-primary, #1f2328)",
+								color: "var(--text-primary)",
 								}}
 							>
 								DocSentinel
 							</Typography>
 							<Typography
 								variant="body2"
-								sx={{ color: "var(--text-secondary, #59636e)", mt: 0.5 }}
+								sx={{ color: "var(--text-secondary)", mt: 0.5 }}
 							>
-								AI-Powered Document Intelligence & Security
+								Secure search and review for your documents
 							</Typography>
 						</Box>
 
@@ -179,10 +182,11 @@ const Login = () => {
 									alignItems: "center",
 									justifyContent: "center",
 									padding: "12px 18px",
-									borderRadius: "12px",
-								border: "1px solid #d1d9e0",
-									background: "#ffffff",
-									color: "#1f2937",
+													minHeight: "44px",
+													borderRadius: "6px",
+													border: "1px solid var(--border)",
+													background: "var(--surface)",
+													color: "var(--text-primary)",
 									fontWeight: 600,
 									fontSize: "15px",
 									cursor: googleLoading || loading ? "not-allowed" : "pointer",
@@ -191,7 +195,7 @@ const Login = () => {
 								}}
 							>
 								{googleLoading ? (
-									<CircularProgress size={20} sx={{ color: "#4285F4" }} />
+									<CircularProgress size={20} sx={{ color: "var(--primary)" }} />
 								) : (
 									<>
 										<GoogleIcon />
@@ -207,11 +211,11 @@ const Login = () => {
 								display: "flex",
 								alignItems: "center",
 								my: 2.5,
-								color: "var(--text, #6b7280)",
+								color: "var(--text)",
 								"&::before, &::after": {
 									content: '""',
 									flex: 1,
-									borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
+													borderBottom: "1px solid var(--border)",
 								},
 							}}
 						>
@@ -222,7 +226,7 @@ const Login = () => {
 									fontWeight: 500,
 									textTransform: "uppercase",
 									letterSpacing: "0.5px",
-									fontSize: "0.72rem",
+									fontSize: "0.8rem",
 								}}
 							>
 								or sign in as administrator
@@ -254,11 +258,12 @@ const Login = () => {
 									endAdornment: (
 										<InputAdornment position="end">
 											<IconButton
-												aria-label="toggle password visibility"
+													aria-label={showPassword ? "Hide password" : "Show password"}
+													aria-pressed={showPassword}
 												onClick={() => setShowPassword((prev) => !prev)}
 												edge="end"
 												size="small"
-												sx={{ color: "var(--text, #9ca3af)" }}
+												sx={{ color: "var(--text)" }}
 											>
 												{showPassword ? <VisibilityOff /> : <Visibility />}
 											</IconButton>
@@ -288,17 +293,17 @@ const Login = () => {
 							sx={{
 								mt: 3,
 								pt: 2,
-								borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+								borderTop: "1px solid var(--border)",
 								display: "flex",
 								alignItems: "center",
 								justifyContent: "center",
 								gap: 1,
-								color: "var(--text, #6b7280)",
+								color: "var(--text)",
 							}}
 						>
 							<SecurityIcon sx={{ fontSize: 16 }} />
 							<Typography variant="caption">
-								Role-Based Access Control Protected
+								Access follows your assigned role
 							</Typography>
 						</Box>
 					</Box>

@@ -326,10 +326,10 @@ export default function ReviewQueue() {
         }}
       >
         <div>
-          <Typography variant="h5" sx={{ fontWeight: 700, color: "var(--text-primary, #111827)" }}>
+          <Typography variant="h5" sx={{ fontWeight: 700, color: "var(--text-primary)" }}>
             Review Queue
           </Typography>
-          <Typography variant="body2" sx={{ color: "var(--text-secondary, #6b7280)" }}>
+          <Typography variant="body2" sx={{ color: "var(--text-secondary)" }}>
             Review, verify OCR accuracy, edit extracted fields, and make authorization decisions.
           </Typography>
         </div>
@@ -339,8 +339,8 @@ export default function ReviewQueue() {
             <Chip
               label={`Department: ${currentUser.department}`}
               sx={{
-                bgcolor: "rgba(245, 158, 11, 0.15)",
-                color: "#fbbf24",
+                bgcolor: "var(--surface-secondary)",
+                color: "var(--text-secondary)",
                 fontWeight: 600,
                 fontSize: "0.8rem",
               }}
@@ -349,8 +349,8 @@ export default function ReviewQueue() {
             <Chip
               label="Super Admin · All Departments"
               sx={{
-                bgcolor: "rgba(16, 185, 129, 0.15)",
-                color: "#10b981",
+                bgcolor: "var(--surface-secondary)",
+                color: "var(--text-secondary)",
                 fontWeight: 600,
                 fontSize: "0.8rem",
               }}
@@ -361,10 +361,10 @@ export default function ReviewQueue() {
             onClick={fetchQueue}
             disabled={loading}
             sx={{
-              backgroundColor: "var(--surface, #ffffff)",
-              border: "1px solid var(--border, #e5e7eb)",
+              backgroundColor: "var(--surface)",
+              border: "1px solid var(--border)",
               borderRadius: "10px",
-              "&:hover": { backgroundColor: "var(--surface-secondary, #f3f4f6)" },
+              "&:hover": { backgroundColor: "var(--surface-secondary)" },
             }}
             title="Refresh Queue"
             aria-label="Refresh review queue"
@@ -405,8 +405,8 @@ export default function ReviewQueue() {
                 display: "flex",
                 alignItems: "center",
                 gap: "8px",
-                background: "var(--surface, #ffffff)",
-                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
                 borderRadius: "10px",
                 padding: "6px 12px",
                 minWidth: "300px",
@@ -447,8 +447,8 @@ export default function ReviewQueue() {
           ) : filteredQueue.length === 0 ? (
             <Box
               sx={{
-                background: "var(--surface, #ffffff)",
-                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
                 borderRadius: "14px",
                 py: 10,
                 textAlign: "center",
@@ -468,8 +468,8 @@ export default function ReviewQueue() {
           ) : (
             <div
               style={{
-                background: "var(--surface, #ffffff)",
-                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
                 borderRadius: "14px",
                 overflow: "hidden",
                 boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
@@ -479,9 +479,9 @@ export default function ReviewQueue() {
                 <thead>
                   <tr
                     style={{
-                      borderBottom: "1px solid var(--border, #e5e7eb)",
-                      background: "var(--surface-secondary, #f9fafb)",
-                      color: "var(--text-secondary, #6b7280)",
+                      borderBottom: "1px solid var(--border)",
+                      background: "var(--surface-secondary)",
+                      color: "var(--text-secondary)",
                       fontWeight: 600,
                     }}
                   >
@@ -506,11 +506,11 @@ export default function ReviewQueue() {
                       <tr
                         key={item.id}
                         style={{
-                          borderBottom: "1px solid var(--border, #e5e7eb)",
+                          borderBottom: "1px solid var(--border)",
                           transition: "background 0.15s ease",
                         }}
                         onMouseEnter={(e) =>
-                          (e.currentTarget.style.backgroundColor = "var(--surface-secondary, #f9fafb)")
+                          (e.currentTarget.style.backgroundColor = "var(--surface-secondary)")
                         }
                         onMouseLeave={(e) =>
                           (e.currentTarget.style.backgroundColor = "transparent")
@@ -523,8 +523,8 @@ export default function ReviewQueue() {
                                 width: "36px",
                                 height: "36px",
                                 borderRadius: "8px",
-                                background: "rgba(11, 122, 92, 0.1)",
-                                color: "var(--primary, #0b7a5c)",
+                                background: "var(--surface-secondary)",
+                                color: "var(--text-secondary)",
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "center",
@@ -537,13 +537,13 @@ export default function ReviewQueue() {
                               <strong
                                 style={{
                                   display: "block",
-                                  color: "var(--text-primary, #111827)",
+                                  color: "var(--text-primary)",
                                   fontSize: "0.9rem",
                                 }}
                               >
                                 {item.original_filename}
                               </strong>
-                              <span style={{ color: "var(--text-secondary, #6b7280)", fontSize: "0.75rem" }}>
+                              <span style={{ color: "var(--text-secondary)", fontSize: "0.75rem" }}>
                                 ID #{item.id} · {item.document_type || item.file_type || "Document"}
                               </span>
                             </div>
@@ -557,8 +557,8 @@ export default function ReviewQueue() {
                             sx={{
                               fontSize: "0.75rem",
                               fontWeight: 600,
-                              bgcolor: "rgba(59, 130, 246, 0.1)",
-                              color: "#2563eb",
+                              bgcolor: "var(--surface-secondary)",
+                              color: "var(--text-secondary)",
                             }}
                           />
                         </td>
@@ -576,8 +576,8 @@ export default function ReviewQueue() {
                                   ml: 1,
                                   height: 18,
                                   fontSize: "0.65rem",
-                                  bgcolor: "rgba(239, 68, 68, 0.15)",
-                                  color: "#ef4444",
+                                  bgcolor: "var(--info-bg)",
+                                  color: "var(--info)",
                                   fontWeight: 600,
                                 }}
                               />
@@ -604,16 +604,16 @@ export default function ReviewQueue() {
                               fontSize: "0.75rem",
                               bgcolor:
                                 confidenceNum !== null && confidenceNum >= 80
-                                  ? "rgba(16, 185, 129, 0.15)"
+                                  ? "var(--success-bg)"
                                   : confidenceNum !== null && confidenceNum >= 60
-                                  ? "rgba(245, 158, 11, 0.15)"
-                                  : "rgba(239, 68, 68, 0.15)",
+                                  ? "var(--warning-bg)"
+                                  : "var(--danger-bg)",
                               color:
                                 confidenceNum !== null && confidenceNum >= 80
-                                  ? "#10b981"
+                                  ? "var(--success)"
                                   : confidenceNum !== null && confidenceNum >= 60
-                                  ? "#f59e0b"
-                                  : "#ef4444",
+                                  ? "var(--warning)"
+                                  : "var(--danger)",
                             }}
                           />
                         </td>
@@ -623,8 +623,8 @@ export default function ReviewQueue() {
                             label="Pending Review"
                             size="small"
                             sx={{
-                              bgcolor: "rgba(168, 85, 247, 0.15)",
-                              color: "#a855f7",
+                              bgcolor: "var(--warning-bg)",
+                              color: "var(--warning)",
                               fontWeight: 600,
                               fontSize: "0.75rem",
                             }}
@@ -642,8 +642,8 @@ export default function ReviewQueue() {
                               fontWeight: 600,
                               fontSize: "0.8rem",
                               borderRadius: "8px",
-                              bgcolor: "var(--primary, #0b7a5c)",
-                              "&:hover": { bgcolor: "#085a44" },
+                              bgcolor: "var(--primary)",
+                              "&:hover": { bgcolor: "var(--primary-hover)" },
                             }}
                           >
                             Review Document
@@ -668,8 +668,8 @@ export default function ReviewQueue() {
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              background: "var(--surface, #ffffff)",
-              border: "1px solid var(--border, #e5e7eb)",
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
               borderRadius: "12px",
               padding: "12px 18px",
               marginBottom: "16px",
@@ -743,8 +743,8 @@ export default function ReviewQueue() {
                   textTransform: "none",
                   borderRadius: "8px",
                   fontWeight: 600,
-                  bgcolor: "var(--primary, #0b7a5c)",
-                  "&:hover": { bgcolor: "#085a44" },
+                  bgcolor: "var(--primary)",
+                  "&:hover": { bgcolor: "var(--primary-hover)" },
                 }}
               >
                 {actionLoading ? "Processing..." : "Approve Document"}
@@ -779,8 +779,8 @@ export default function ReviewQueue() {
             {/* ================= LEFT: ORIGINAL PREVIEW ================= */}
             <div
               style={{
-                background: "var(--surface, #ffffff)",
-                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
                 borderRadius: "14px",
                 display: "flex",
                 flexDirection: "column",
@@ -794,8 +794,8 @@ export default function ReviewQueue() {
                   justifyContent: "space-between",
                   alignItems: "center",
                   padding: "10px 16px",
-                  borderBottom: "1px solid var(--border, #e5e7eb)",
-                  background: "var(--surface-secondary, #f9fafb)",
+                  borderBottom: "1px solid var(--border)",
+                  background: "var(--surface-secondary)",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -842,7 +842,7 @@ export default function ReviewQueue() {
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
-                  background: "var(--background, #f8f7f4)",
+                  background: "var(--background)",
                 }}
               >
                 <div
@@ -851,8 +851,8 @@ export default function ReviewQueue() {
                     transformOrigin: "top center",
                     width: "100%",
                     maxWidth: "650px",
-                    background: "var(--surface, #ffffff)",
-                    border: "1px solid var(--border, #e5e7eb)",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
                     borderRadius: "10px",
                     padding: "24px",
                     boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
@@ -880,8 +880,8 @@ export default function ReviewQueue() {
                     sx={{
                       p: 2,
                       borderRadius: "8px",
-                      background: "var(--surface-secondary, #f9fafb)",
-                      border: "1px solid var(--border, #e5e7eb)",
+                      background: "var(--surface-secondary)",
+                      border: "1px solid var(--border)",
                       fontFamily: "monospace",
                       fontSize: "0.8rem",
                       lineHeight: 1.6,
@@ -912,8 +912,8 @@ export default function ReviewQueue() {
             {/* ================= RIGHT: EXTRACTED CONTENT & CORRECTION WORKSPACE ================= */}
             <div
               style={{
-                background: "var(--surface, #ffffff)",
-                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
                 borderRadius: "14px",
                 display: "flex",
                 flexDirection: "column",
@@ -921,7 +921,7 @@ export default function ReviewQueue() {
               }}
             >
               {/* Workspace Navigation Tabs */}
-              <Box sx={{ borderBottom: 1, borderColor: "var(--border, #e5e7eb)", bgcolor: "var(--surface-secondary, #f9fafb)" }}>
+              <Box sx={{ borderBottom: 1, borderColor: "var(--border)", bgcolor: "var(--surface-secondary)" }}>
                 <Tabs
                   value={detailTab}
                   onChange={(_, val) => setDetailTab(val)}
@@ -976,8 +976,8 @@ export default function ReviewQueue() {
                         <div
                           key={res.id}
                           style={{
-                            background: "var(--background, #f8f7f4)",
-                            border: "1px solid var(--border, #e5e7eb)",
+                            background: "var(--background)",
+                            border: "1px solid var(--border)",
                             borderRadius: "10px",
                             padding: "14px",
                             marginBottom: "16px",
@@ -1061,7 +1061,7 @@ export default function ReviewQueue() {
                                 lineHeight: 1.6,
                                 whiteSpace: "pre-wrap",
                                 color: "var(--text-primary)",
-                                background: "var(--surface, #ffffff)",
+                                background: "var(--surface)",
                                 padding: "10px",
                                 borderRadius: "6px",
                                 border: "1px solid var(--border)",
@@ -1116,8 +1116,8 @@ export default function ReviewQueue() {
                         <div
                           key={field.id}
                           style={{
-                            background: "var(--background, #f8f7f4)",
-                            border: "1px solid var(--border, #e5e7eb)",
+                            background: "var(--background)",
+                            border: "1px solid var(--border)",
                             borderRadius: "10px",
                             padding: "12px 14px",
                             marginBottom: "12px",
@@ -1136,10 +1136,10 @@ export default function ReviewQueue() {
                                 fontWeight: 600,
                                 bgcolor:
                                   field.confidence && field.confidence >= 80
-                                    ? "rgba(16, 185, 129, 0.15)"
-                                    : "rgba(245, 158, 11, 0.15)",
+                                    ? "var(--success-bg)"
+                                    : "var(--warning-bg)",
                                 color:
-                                  field.confidence && field.confidence >= 80 ? "#10b981" : "#f59e0b",
+                                  field.confidence && field.confidence >= 80 ? "var(--success)" : "var(--warning)",
                               }}
                             />
                           </div>
@@ -1160,9 +1160,9 @@ export default function ReviewQueue() {
                               disabled={isSaving || isOwnDocument}
                               title="Save field change"
                               sx={{
-                                bgcolor: "rgba(11, 122, 92, 0.1)",
+                                bgcolor: "var(--primary-light)",
                                 color: "var(--primary)",
-                                "&:hover": { bgcolor: "rgba(11, 122, 92, 0.2)" },
+                                "&:hover": { bgcolor: "var(--primary-light)" },
                               }}
                             >
                               {isSaving ? <CircularProgress size={16} /> : <SaveIcon fontSize="small" />}
@@ -1239,11 +1239,11 @@ export default function ReviewQueue() {
         slotProps={{
           paper: {
             sx: {
-              background: "var(--surface, #ffffff)",
-              color: "var(--text-primary, #111827)",
+              background: "var(--surface)",
+              color: "var(--text-primary)",
               borderRadius: "14px",
               minWidth: "400px",
-              border: "1px solid var(--border, #e5e7eb)",
+              border: "1px solid var(--border)",
             },
           },
         }}
@@ -1286,11 +1286,11 @@ export default function ReviewQueue() {
         slotProps={{
           paper: {
             sx: {
-              background: "var(--surface, #ffffff)",
-              color: "var(--text-primary, #111827)",
+              background: "var(--surface)",
+              color: "var(--text-primary)",
               borderRadius: "14px",
               minWidth: "400px",
-              border: "1px solid var(--border, #e5e7eb)",
+              border: "1px solid var(--border)",
             },
           },
         }}

@@ -31,9 +31,6 @@ import {
 import RefreshIcon from "@mui/icons-material/Refresh";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import PeopleIcon from "@mui/icons-material/People";
-import SecurityIcon from "@mui/icons-material/Security";
-import CloudUploadIcon from "@mui/icons-material/CloudUpload";
-import FactCheckIcon from "@mui/icons-material/FactCheck";
 import HistoryIcon from "@mui/icons-material/History";
 import DeleteIcon from "@mui/icons-material/Delete";
 import PersonAddIcon from "@mui/icons-material/PersonAdd";
@@ -357,13 +354,13 @@ export default function Admin() {
 			>
 				<Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
 					<AdminPanelSettingsIcon
-						sx={{ color: "var(--accent, #a855f7)", fontSize: 32 }}
+						sx={{ color: "var(--accent)", fontSize: 32 }}
 					/>
 					<Box>
 						<Typography variant="h5" sx={{ fontWeight: 700, color: "var(--text-primary)" }}>
 							System Administration
 						</Typography>
-						<Typography variant="body2" sx={{ color: "var(--text-secondary, #64748b)" }}>
+						<Typography variant="body2" sx={{ color: "var(--text-secondary)" }}>
 							{isSuperAdmin
 								? "System-wide administration, RBAC governance, and security audit logs"
 								: `Department Admin console — ${currentUser?.department || "Assigned"} Department`}
@@ -377,8 +374,8 @@ export default function Admin() {
 						startIcon={<PersonAddIcon />}
 						onClick={() => setInviteOpen(true)}
 						sx={{
-							bgcolor: "var(--accent, #a855f7)",
-							"&:hover": { bgcolor: "#9333ea" },
+						bgcolor: "var(--primary)",
+						"&:hover": { bgcolor: "var(--primary-hover)" },
 							borderRadius: "8px",
 							textTransform: "none",
 							fontWeight: 600,
@@ -389,7 +386,7 @@ export default function Admin() {
 					<IconButton
 						onClick={() => (currentTab === 0 ? fetchUsers() : fetchLogs(logPage, logPageSize))}
 						sx={{
-							border: "1px solid var(--border, #e5e7eb)",
+							border: "1px solid var(--border)",
 							borderRadius: "8px",
 							color: "var(--text-secondary)",
 						}}
@@ -406,15 +403,15 @@ export default function Admin() {
 				onChange={(_, v) => setCurrentTab(v)}
 				sx={{
 					mb: 3,
-					borderBottom: "1px solid var(--border, #e5e7eb)",
+					borderBottom: "1px solid var(--border)",
 					"& .MuiTab-root": {
 						textTransform: "none",
 						fontWeight: 600,
 						fontSize: "0.95rem",
-						color: "var(--text-secondary, #64748b)",
-						"&.Mui-selected": { color: "var(--accent, #a855f7)" },
+						color: "var(--text-secondary)",
+						"&.Mui-selected": { color: "var(--accent)" },
 					},
-					"& .MuiTabs-indicator": { backgroundColor: "var(--accent, #a855f7)" },
+					"& .MuiTabs-indicator": { backgroundColor: "var(--accent)" },
 				}}
 			>
 				<Tab icon={<PeopleIcon />} iconPosition="start" label="Users & Roles" />
@@ -433,107 +430,21 @@ export default function Admin() {
 			{/* ======================================================== */}
 			{currentTab === 0 && (
 				<>
-					{/* Role Metric Cards */}
-					<Box
-						sx={{
-							display: "grid",
-							gridTemplateColumns: {
-								xs: "1fr",
-								sm: "1fr 1fr",
-								md: isSuperAdmin ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
-							},
-							gap: 2,
-							mb: 3,
-						}}
-					>
-						{isSuperAdmin && (
-							<Paper
-								sx={{
-									p: 2,
-									borderRadius: "14px",
-									background: "var(--surface, #ffffff)",
-									color: "var(--text-primary)",
-									border: "1px solid var(--border, #e5e7eb)",
-								}}
-							>
-								<Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 0.5 }}>
-									<SecurityIcon sx={{ color: "#c084fc", fontSize: 20 }} />
-									<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)", fontWeight: 600 }}>
-										SUPER ADMIN
-									</Typography>
-								</Box>
-								<Typography variant="h5" sx={{ fontWeight: 700 }}>
-									{usersLoading ? "..." : superAdminCount}
-								</Typography>
-							</Paper>
-						)}
-
-						<Paper
-							sx={{
-								p: 2,
-								borderRadius: "14px",
-								background: "var(--surface, #ffffff)",
-								color: "var(--text-primary)",
-								border: "1px solid var(--border, #e5e7eb)",
-							}}
-						>
-							<Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 0.5 }}>
-								<AdminPanelSettingsIcon sx={{ color: "#f59e0b", fontSize: 20 }} />
-								<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)", fontWeight: 600 }}>
-									DEPT ADMINS
-								</Typography>
-							</Box>
-							<Typography variant="h5" sx={{ fontWeight: 700 }}>
-								{usersLoading ? "..." : deptAdminCount}
-							</Typography>
-						</Paper>
-
-						<Paper
-							sx={{
-								p: 2,
-								borderRadius: "14px",
-								background: "var(--surface, #ffffff)",
-								color: "var(--text-primary)",
-								border: "1px solid var(--border, #e5e7eb)",
-							}}
-						>
-							<Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 0.5 }}>
-								<FactCheckIcon sx={{ color: "#10b981", fontSize: 20 }} />
-								<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)", fontWeight: 600 }}>
-									CHECKERS
-								</Typography>
-							</Box>
-							<Typography variant="h5" sx={{ fontWeight: 700 }}>
-								{usersLoading ? "..." : checkerCount}
-							</Typography>
-						</Paper>
-
-						<Paper
-							sx={{
-								p: 2,
-								borderRadius: "14px",
-								background: "var(--surface, #ffffff)",
-								color: "var(--text-primary)",
-								border: "1px solid var(--border, #e5e7eb)",
-							}}
-						>
-							<Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 0.5 }}>
-								<CloudUploadIcon sx={{ color: "#38bdf8", fontSize: 20 }} />
-								<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)", fontWeight: 600 }}>
-									MAKERS
-								</Typography>
-							</Box>
-							<Typography variant="h5" sx={{ fontWeight: 700 }}>
-								{usersLoading ? "..." : makerCount}
-							</Typography>
-						</Paper>
+					<Box className="adminRoleSummary" aria-label="Users by role">
+						<span>Users by role</span>
+						<div>
+							{isSuperAdmin && <span><strong>{usersLoading ? "…" : superAdminCount}</strong> Super admins</span>}
+							<span><strong>{usersLoading ? "…" : deptAdminCount}</strong> Department admins</span>
+							<span><strong>{usersLoading ? "…" : checkerCount}</strong> Checkers</span>
+							<span><strong>{usersLoading ? "…" : makerCount}</strong> Makers</span>
+						</div>
 					</Box>
 
 					{/* Department filter bar (Super Admin only) */}
 					{isSuperAdmin && (
 						<Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2 }}>
-							<FilterListIcon sx={{ color: "var(--text-secondary, #64748b)", fontSize: 20 }} />
-							<Typography variant="body2" sx={{ color: "var(--text-secondary, #64748b)", fontWeight: 600 }}>
+							<FilterListIcon sx={{ color: "var(--text-secondary)", fontSize: 20 }} />
+							<Typography variant="body2" sx={{ color: "var(--text-secondary)", fontWeight: 600 }}>
 								Department Scope:
 							</Typography>
 							<Select
@@ -564,14 +475,14 @@ export default function Admin() {
 						component={Paper}
 						sx={{
 							borderRadius: "14px",
-							background: "var(--surface, #ffffff)",
+							background: "var(--surface)",
 							color: "var(--text-primary)",
-							border: "1px solid var(--border, #e5e7eb)",
+							border: "1px solid var(--border)",
 							overflow: "hidden",
 						}}
 					>
 						<Table size="small">
-							<TableHead sx={{ background: "var(--surface-secondary, #f9fafb)" }}>
+							<TableHead sx={{ background: "var(--surface-secondary)" }}>
 								<TableRow>
 									<TableCell sx={{ fontWeight: 600, color: "var(--text-primary)" }}>User</TableCell>
 									<TableCell sx={{ fontWeight: 600, color: "var(--text-primary)" }}>Email &amp; Auth</TableCell>
@@ -587,7 +498,7 @@ export default function Admin() {
 								{usersLoading ? (
 									<TableRow>
 										<TableCell colSpan={8} align="center" sx={{ py: 6 }}>
-											<CircularProgress size={30} sx={{ color: "var(--accent, #a855f7)" }} />
+											<CircularProgress size={30} sx={{ color: "var(--accent)" }} />
 										</TableCell>
 									</TableRow>
 								) : displayedUsers.length === 0 ? (
@@ -637,14 +548,7 @@ export default function Admin() {
 															sx={{
 																width: 32,
 																height: 32,
-																bgcolor:
-																	roleVal === "SUPER_ADMIN"
-																		? "#a855f7"
-																		: roleVal === "DEPARTMENT_ADMIN"
-																			? "#f59e0b"
-																			: roleVal === "DEPARTMENT_CHECKER"
-																				? "#059669"
-																				: "#2563eb",
+										bgcolor: "var(--surface-hover)",
 																fontSize: "12px",
 																fontWeight: 600,
 															}}
@@ -662,13 +566,13 @@ export default function Admin() {
 																			ml: 1,
 																			height: 18,
 																			fontSize: "0.65rem",
-																			bgcolor: "rgba(168, 85, 247, 0.2)",
-																			color: "var(--accent, #a855f7)",
+															bgcolor: "var(--surface-secondary)",
+															color: "var(--text-secondary)",
 																		}}
 																	/>
 																)}
 															</Typography>
-															<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)" }}>
+															<Typography variant="caption" sx={{ color: "var(--text-secondary)" }}>
 																ID: #{u.id}
 															</Typography>
 														</Box>
@@ -677,7 +581,7 @@ export default function Admin() {
 
 												<TableCell>
 													<Typography variant="body2" sx={{ color: "var(--text-primary)" }}>{u.email}</Typography>
-													<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)", display: "block" }}>
+													<Typography variant="caption" sx={{ color: "var(--text-secondary)", display: "block" }}>
 														{u.has_password ? "• Password set" : u.google_linked ? "• Google linked" : "• Setup pending"}
 													</Typography>
 												</TableCell>
@@ -726,14 +630,14 @@ export default function Admin() {
 																fontWeight: 600,
 																borderRadius: "8px",
 																backgroundColor: "var(--surface)",
-																color: !u.department && roleVal !== "SUPER_ADMIN" ? "#ef4444" : "var(--text-primary)",
+										color: !u.department && roleVal !== "SUPER_ADMIN" ? "var(--text-secondary)" : "var(--text-primary)",
 															}}
 														>
 															{roleVal === "SUPER_ADMIN" ? (
 																<MenuItem value="NONE">Cross-Dept / All</MenuItem>
 															) : (
 																!u.department && (
-																	<MenuItem value="UNASSIGNED" disabled sx={{ color: "#ef4444", fontWeight: 700 }}>
+												<MenuItem value="UNASSIGNED" disabled sx={{ color: "var(--text-muted)", fontWeight: 500 }}>
 																		⚠ Dept Unassigned
 																	</MenuItem>
 																)
@@ -751,8 +655,8 @@ export default function Admin() {
 															sx={{
 																height: 22,
 																fontSize: "0.7rem",
-																bgcolor: "rgba(245, 158, 11, 0.15)",
-																color: "#fbbf24",
+											bgcolor: "var(--surface-secondary)",
+											color: "var(--text-secondary)",
 																fontWeight: 600,
 															}}
 														/>
@@ -770,13 +674,13 @@ export default function Admin() {
 												</TableCell>
 
 												<TableCell>
-													<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)" }}>
+													<Typography variant="caption" sx={{ color: "var(--text-secondary)" }}>
 														{u.created_at ? new Date(u.created_at).toLocaleDateString() : "--"}
 													</Typography>
 												</TableCell>
 
 												<TableCell>
-													<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)" }}>
+													<Typography variant="caption" sx={{ color: "var(--text-secondary)" }}>
 														{u.last_login ? new Date(u.last_login).toLocaleString() : "Never"}
 													</Typography>
 												</TableCell>
@@ -790,7 +694,7 @@ export default function Admin() {
 															onClick={() => handleToggleActive(u)}
 															sx={{
 																fontSize: "0.7rem",
-																color: u.is_active ? "#f87171" : "#10b981",
+												color: u.is_active ? "var(--danger)" : "var(--success)",
 																textTransform: "none",
 																fontWeight: 600,
 															}}
@@ -807,8 +711,8 @@ export default function Admin() {
 															}}
 															title="Permanently delete user"
 															sx={{
-																color: isCurrent || isTargetSuperAdmin ? "var(--text-muted)" : "#ef4444",
-																"&:hover": { backgroundColor: "rgba(239, 68, 68, 0.1)" },
+											color: isCurrent || isTargetSuperAdmin ? "var(--text-muted)" : "var(--danger)",
+											"&:hover": { backgroundColor: "var(--surface-hover)" },
 															}}
 														>
 															<DeleteIcon fontSize="small" />
@@ -836,9 +740,9 @@ export default function Admin() {
 							p: 2,
 							mb: 3,
 							borderRadius: "14px",
-							background: "var(--surface, #ffffff)",
+							background: "var(--surface)",
 							color: "var(--text-primary)",
-							border: "1px solid var(--border, #e5e7eb)",
+							border: "1px solid var(--border)",
 							display: "flex",
 							flexWrap: "wrap",
 							gap: 2,
@@ -936,8 +840,8 @@ export default function Admin() {
 							onClick={() => fetchLogs(0, logPageSize)}
 							disabled={logsLoading}
 							sx={{
-								bgcolor: "var(--accent, #a855f7)",
-								"&:hover": { bgcolor: "#9333ea" },
+								bgcolor: "var(--accent)",
+								"&:hover": { bgcolor: "var(--primary-hover)" },
 								borderRadius: "8px",
 								textTransform: "none",
 								fontWeight: 600,
@@ -953,14 +857,14 @@ export default function Admin() {
 						component={Paper}
 						sx={{
 							borderRadius: "14px",
-							background: "var(--surface, #ffffff)",
+							background: "var(--surface)",
 							color: "var(--text-primary)",
-							border: "1px solid var(--border, #e5e7eb)",
+							border: "1px solid var(--border)",
 							overflowX: "auto",
 						}}
 					>
 						<Table size="small" sx={{ minWidth: 1000, tableLayout: "fixed" }}>
-							<TableHead sx={{ background: "var(--surface-secondary, #f9fafb)" }}>
+							<TableHead sx={{ background: "var(--surface-secondary)" }}>
 								<TableRow>
 									<TableCell sx={{ fontWeight: 600, color: "var(--text-primary)", width: "165px" }}>Timestamp (UTC)</TableCell>
 									<TableCell sx={{ fontWeight: 600, color: "var(--text-primary)", width: "155px" }}>Actor</TableCell>
@@ -976,7 +880,7 @@ export default function Admin() {
 								{logsLoading ? (
 									<TableRow>
 										<TableCell colSpan={8} align="center" sx={{ py: 6 }}>
-											<CircularProgress size={30} sx={{ color: "var(--accent, #a855f7)" }} />
+											<CircularProgress size={30} sx={{ color: "var(--accent)" }} />
 										</TableCell>
 									</TableRow>
 								) : activityLogs.length === 0 ? (
@@ -999,7 +903,7 @@ export default function Admin() {
 												}}
 											>
 												<TableCell sx={{ whiteSpace: "normal" }}>
-													<Typography variant="caption" sx={{ fontFamily: "monospace", color: "var(--text-secondary, #64748b)" }}>
+													<Typography variant="caption" sx={{ fontFamily: "monospace", color: "var(--text-secondary)" }}>
 														{new Date(log.timestamp).toLocaleString(undefined, {
 															month: "short",
 															day: "numeric",
@@ -1025,8 +929,8 @@ export default function Admin() {
 																sx={{
 																	height: 18,
 																	fontSize: "0.65rem",
-																	bgcolor: "rgba(245, 158, 11, 0.15)",
-																	color: "#fbbf24",
+												bgcolor: "var(--surface-secondary)",
+													color: "var(--text-secondary)",
 																	fontWeight: 600,
 																}}
 															/>
@@ -1038,8 +942,8 @@ export default function Admin() {
 																sx={{
 																	height: 18,
 																	fontSize: "0.65rem",
-																	bgcolor: "rgba(168, 85, 247, 0.15)",
-																	color: "var(--accent, #a855f7)",
+												bgcolor: "var(--surface-secondary)",
+													color: "var(--text-secondary)",
 																	fontWeight: 600,
 																}}
 															/>
@@ -1056,8 +960,8 @@ export default function Admin() {
 															px: 0.8,
 															py: 0.2,
 															borderRadius: "4px",
-															bgcolor: isFailure ? "rgba(239, 68, 68, 0.1)" : "rgba(37, 99, 235, 0.1)",
-															color: isFailure ? "#ef4444" : "#2563eb",
+									bgcolor: "var(--surface-secondary)",
+									color: isFailure ? "var(--danger)" : "var(--info)",
 														}}
 													>
 														{log.action}
@@ -1078,8 +982,8 @@ export default function Admin() {
 															height: 20,
 															fontSize: "0.65rem",
 															fontWeight: 700,
-															bgcolor: isSuccess ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-															color: isSuccess ? "#10b981" : "#ef4444",
+									bgcolor: "var(--surface-secondary)",
+									color: isSuccess ? "var(--success)" : "var(--danger)",
 														}}
 													/>
 												</TableCell>
@@ -1146,7 +1050,7 @@ export default function Admin() {
 								fetchLogs(0, newSize);
 							}}
 							rowsPerPageOptions={[10, 20, 50, 100]}
-							sx={{ borderTop: "1px solid var(--border, #e5e7eb)", color: "var(--text-primary)" }}
+							sx={{ borderTop: "1px solid var(--border)", color: "var(--text-primary)" }}
 						/>
 					</TableContainer>
 				</>
@@ -1164,9 +1068,9 @@ export default function Admin() {
 					paper: {
 						sx: {
 							borderRadius: "14px",
-							background: "var(--surface, #ffffff)",
-							color: "var(--text-primary, #111827)",
-							border: "1px solid var(--border, #e5e7eb)",
+							background: "var(--surface)",
+							color: "var(--text-primary)",
+							border: "1px solid var(--border)",
 						},
 					},
 				}}
@@ -1179,8 +1083,8 @@ export default function Admin() {
 								label={selectedLogDetail.status}
 								size="small"
 								sx={{
-									bgcolor: selectedLogDetail.status === "SUCCESS" ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-									color: selectedLogDetail.status === "SUCCESS" ? "#10b981" : "#ef4444",
+					bgcolor: "var(--surface-secondary)",
+					color: selectedLogDetail.status === "SUCCESS" ? "var(--success)" : "var(--danger)",
 									fontWeight: 700,
 								}}
 							/>
@@ -1196,11 +1100,11 @@ export default function Admin() {
 							</Box>
 
 							{selectedLogDetail.failure_reason && (
-								<Box sx={{ p: 1.5, borderRadius: "8px", bgcolor: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.3)" }}>
-									<Typography variant="caption" sx={{ color: "#ef4444", fontWeight: 700, display: "block" }}>
+				<Box sx={{ p: 1.5, borderRadius: "8px", bgcolor: "var(--surface-secondary)", border: "1px solid var(--border)" }}>
+					<Typography variant="caption" sx={{ color: "var(--danger)", fontWeight: 700, display: "block" }}>
 										Failure Reason:
 									</Typography>
-									<Typography variant="body2" sx={{ color: "#ef4444" }}>
+					<Typography variant="body2" sx={{ color: "var(--danger)" }}>
 										{selectedLogDetail.failure_reason}
 									</Typography>
 								</Box>
@@ -1255,9 +1159,9 @@ export default function Admin() {
 					paper: {
 						sx: {
 							borderRadius: "14px",
-							background: "var(--surface, #ffffff)",
-							color: "var(--text-primary, #111827)",
-							border: "1px solid var(--border, #e5e7eb)",
+							background: "var(--surface)",
+							color: "var(--text-primary)",
+							border: "1px solid var(--border)",
 							minWidth: 400,
 						},
 					},
@@ -1306,7 +1210,7 @@ export default function Admin() {
 
 						{isSuperAdmin ? (
 							<Box>
-								<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)", display: "block", mb: 0.5, fontWeight: 600 }}>
+								<Typography variant="caption" sx={{ color: "var(--text-secondary)", display: "block", mb: 0.5, fontWeight: 600 }}>
 									Department {inviteForm.role !== "SUPER_ADMIN" ? "(Required)" : "(Optional for Super Admin)"}
 								</Typography>
 								<Select
@@ -1324,7 +1228,7 @@ export default function Admin() {
 									{inviteForm.role === "SUPER_ADMIN" ? (
 										<MenuItem value="NONE">Cross-Department / All</MenuItem>
 									) : (
-										<MenuItem value="" disabled sx={{ color: "var(--text-muted, #9ca3af)" }}>
+										<MenuItem value="" disabled sx={{ color: "var(--text-muted)" }}>
 											Select Department (Required)
 										</MenuItem>
 									)}
@@ -1336,13 +1240,13 @@ export default function Admin() {
 								</Select>
 							</Box>
 						) : (
-							<Typography variant="caption" sx={{ color: "var(--text-secondary, #64748b)" }}>
+							<Typography variant="caption" sx={{ color: "var(--text-secondary)" }}>
 								Department locked to: <strong>{currentUser?.department}</strong>
 							</Typography>
 						)}
 					</DialogContent>
 					<DialogActions sx={{ p: 2 }}>
-						<Button type="button" onClick={() => setInviteOpen(false)} sx={{ color: "var(--text-secondary, #9ca3af)" }}>
+						<Button type="button" onClick={() => setInviteOpen(false)} sx={{ color: "var(--text-secondary)" }}>
 							Cancel
 						</Button>
 						<Button
@@ -1350,8 +1254,8 @@ export default function Admin() {
 							variant="contained"
 							disabled={inviteSubmitting}
 							sx={{
-								bgcolor: "var(--accent, #a855f7)",
-								"&:hover": { bgcolor: "#9333ea" },
+								bgcolor: "var(--accent)",
+								"&:hover": { bgcolor: "var(--primary-hover)" },
 							}}
 						>
 							{inviteSubmitting ? "Adding..." : "Add User"}
@@ -1370,22 +1274,22 @@ export default function Admin() {
 					paper: {
 						sx: {
 							borderRadius: "14px",
-							background: "var(--surface, #ffffff)",
-							color: "var(--text-primary, #111827)",
-							border: "1px solid var(--border, #e5e7eb)",
+							background: "var(--surface)",
+							color: "var(--text-primary)",
+							border: "1px solid var(--border)",
 						},
 					},
 				}}
 			>
-				<DialogTitle sx={{ fontWeight: 700, color: "#f87171" }}>
+				<DialogTitle sx={{ fontWeight: 700, color: "var(--danger)" }}>
 					Confirm User Deletion
 				</DialogTitle>
 				<DialogContent>
-					<DialogContentText sx={{ color: "var(--text-primary, #111827)", mb: 2 }}>
+					<DialogContentText sx={{ color: "var(--text-primary)", mb: 2 }}>
 						Are you sure you want to permanently delete{" "}
 						<strong>{deleteTargetUser?.name} ({deleteTargetUser?.email})</strong>?
 					</DialogContentText>
-					<Typography variant="body2" sx={{ color: "var(--text-secondary, #64748b)" }}>
+					<Typography variant="body2" sx={{ color: "var(--text-secondary)" }}>
 						• The user will be completely removed from the user list.
 						<br />
 						• All previously uploaded documents will be safely preserved with document attribution intact.
@@ -1394,7 +1298,7 @@ export default function Admin() {
 					</Typography>
 				</DialogContent>
 				<DialogActions sx={{ p: 2 }}>
-					<Button onClick={() => setDeleteTargetUser(null)} sx={{ color: "var(--text-secondary, #9ca3af)" }}>
+					<Button onClick={() => setDeleteTargetUser(null)} sx={{ color: "var(--text-secondary)" }}>
 						Cancel
 					</Button>
 					<Button

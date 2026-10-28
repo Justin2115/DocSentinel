@@ -136,9 +136,17 @@ def initialize_database() -> None:
                 ALTER TABLE documents ADD COLUMN IF NOT EXISTS department VARCHAR(50);
                 ALTER TABLE documents ADD COLUMN IF NOT EXISTS assigned_checker INTEGER REFERENCES users(id) ON DELETE SET NULL;
                 ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+                -- Reconcile legacy role values before restoring the full role
+                -- constraint. Drop the older three-role constraint first so
+                -- department roles can be normalized without violating it.
+                ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_supported_role;
                 UPDATE users SET role = CASE
-                    WHEN UPPER(REPLACE(role, ' ', '_')) IN ('ADMIN', 'ADMINISTRATOR') THEN 'ADMIN'
-                    WHEN UPPER(REPLACE(role, ' ', '_')) IN ('UPLOAD_CHECKER', 'CHECKER') THEN 'UPLOAD_CHECKER'
+                    WHEN UPPER(REPLACE(TRIM(role), ' ', '_')) IN ('SUPER_ADMIN', 'SUPERADMIN', 'SUPER_ADMINISTRATOR') THEN 'SUPER_ADMIN'
+                    WHEN UPPER(REPLACE(TRIM(role), ' ', '_')) IN ('ADMIN', 'ADMINISTRATOR') THEN 'ADMIN'
+                    WHEN UPPER(REPLACE(TRIM(role), ' ', '_')) IN ('DEPARTMENT_ADMIN', 'DEPT_ADMIN', 'DEPARTMENTADMIN', 'DEPTADMIN') THEN 'DEPARTMENT_ADMIN'
+                    WHEN UPPER(REPLACE(TRIM(role), ' ', '_')) IN ('DEPARTMENT_CHECKER', 'DEPT_CHECKER') THEN 'DEPARTMENT_CHECKER'
+                    WHEN UPPER(REPLACE(TRIM(role), ' ', '_')) IN ('UPLOAD_CHECKER', 'CHECKER') THEN 'UPLOAD_CHECKER'
+                    WHEN UPPER(REPLACE(TRIM(role), ' ', '_')) IN ('DEPARTMENT_MAKER', 'DEPT_MAKER') THEN 'DEPARTMENT_MAKER'
                     ELSE 'UPLOAD_MAKER'
                 END;
                 DO $$ BEGIN
@@ -146,7 +154,10 @@ def initialize_database() -> None:
                         SELECT 1 FROM pg_constraint WHERE conname = 'ck_users_supported_role'
                     ) THEN
                         ALTER TABLE users ADD CONSTRAINT ck_users_supported_role
-                        CHECK (role IN ('ADMIN', 'UPLOAD_MAKER', 'UPLOAD_CHECKER'));
+                        CHECK (role IN (
+                            'SUPER_ADMIN', 'DEPARTMENT_ADMIN', 'DEPARTMENT_CHECKER',
+                            'DEPARTMENT_MAKER', 'ADMIN', 'UPLOAD_MAKER', 'UPLOAD_CHECKER'
+                        ));
                     END IF;
                 END $$;
                 ALTER TABLE folder_permissions ADD COLUMN IF NOT EXISTS folder_name VARCHAR(100);

@@ -1,16 +1,17 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
-import Admin from "../pages/Admin";
-import AskQuestion from "../pages/AskQuestion";
-import AuthCallback from "../pages/AuthCallback";
-import Dashboard from "../pages/Dashboard";
-import Library from "../pages/Library";
-import Login from "../pages/Login";
 import NotFound from "../pages/NotFound";
-import Profile from "../pages/Profile";
-import ReviewQueue from "../pages/ReviewQueue";
-import Settings from "../pages/Settings";
-import Upload from "../pages/Upload";
+const Admin = lazy(() => import("../pages/Admin"));
+const AskQuestion = lazy(() => import("../pages/AskQuestion"));
+const AuthCallback = lazy(() => import("../pages/AuthCallback"));
+const Dashboard = lazy(() => import("../pages/Dashboard"));
+const Library = lazy(() => import("../pages/Library"));
+const Login = lazy(() => import("../pages/Login"));
+const Profile = lazy(() => import("../pages/Profile"));
+const ReviewQueue = lazy(() => import("../pages/ReviewQueue"));
+const Settings = lazy(() => import("../pages/Settings"));
+const Upload = lazy(() => import("../pages/Upload"));
 
 import PageLayout from "../components/layout/PageLayout";
 import { AdminRoute, CheckerRoute, MakerRoute, ProtectedRoute } from "./RouteGuards";
@@ -27,6 +28,7 @@ const RootRedirect = () => {
 
 const AppRoutes = () => {
 	return (
+		<Suspense fallback={<div className="routeLoading" role="status" aria-live="polite">Loading page…</div>}>
 		<Routes>
 			<Route path="/" element={<RootRedirect />} />
 			<Route path="/login" element={<Login />} />
@@ -125,6 +127,7 @@ const AppRoutes = () => {
 
 			<Route path="*" element={<NotFound />} />
 		</Routes>
+		</Suspense>
 	);
 };
 

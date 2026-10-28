@@ -26,8 +26,9 @@ const CustomButton = ({
       disabled={disabled}
       onClick={onClick}
       sx={{
-        borderRadius: "12px",
-        padding: "12px 20px",
+        borderRadius: "var(--radius-md)",
+        minHeight: 44,
+        padding: "8px 16px",
         fontWeight: 600,
       }}
     >

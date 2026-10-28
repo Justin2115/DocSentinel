@@ -5,30 +5,18 @@ import {
   Chat,
   AssignmentTurnedIn,
   Settings,
-  LightMode,
-  DarkMode,
   ChevronLeft,
   AdminPanelSettings,
 } from "@mui/icons-material";
 import { NavLink, useLocation } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import ThemeSwitcher from "../common/ThemeSwitcher";
 
 export default function SideBar() {
   const { isAdmin, canUpload, canReview } = useAuth();
-  const [darkMode, setDarkMode] = useState(
-    () => localStorage.getItem("theme") === "dark"
-  );
-
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
-
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", darkMode);
-    document.body.classList.toggle("dark-mode", darkMode);
-    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
-    localStorage.setItem("theme", darkMode ? "dark" : "light");
-  }, [darkMode]);
 
   const groups = [
     {
@@ -65,6 +53,7 @@ export default function SideBar() {
             <NavLink
               key={item.path}
               to={item.path}
+              aria-label={item.name}
               title={collapsed ? item.name : undefined}
               aria-current={location.pathname === item.path ? "page" : undefined}
               className={({ isActive }) =>
@@ -81,18 +70,7 @@ export default function SideBar() {
       </div>
 
       <div className="sidebarBottom">
-        <button
-          type="button"
-          className="modeButton"
-          onClick={() => setDarkMode((prev) => !prev)}
-          title={darkMode ? "Light mode" : "Dark mode"}
-          aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-        >
-          {darkMode ? <LightMode /> : <DarkMode />}
-          {!collapsed && (
-            <span>{darkMode ? "Light mode" : "Dark mode"}</span>
-          )}
-        </button>
+        <ThemeSwitcher showLabels={!collapsed} />
 
         <button
           type="button"

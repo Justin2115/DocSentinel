@@ -602,8 +602,8 @@ const AskQuestion = () => {
 							fontSize: "0.75rem",
 							padding: "3px 10px",
 							borderRadius: "12px",
-							background: "rgba(16, 185, 129, 0.12)",
-							color: "#10b981",
+							background: "var(--surface-secondary)",
+							color: "var(--text-secondary)",
 							fontWeight: 600,
 						}}>
 							{scopeIds.length} Document{scopeIds.length > 1 ? "s" : ""} Attached to Context

@@ -694,9 +694,9 @@ export default function Upload() {
             sx={{
               height: 8,
               borderRadius: 4,
-              bgcolor: "rgba(255,255,255,0.08)",
+              bgcolor: "var(--surface-secondary)",
               "& .MuiLinearProgress-bar": {
-                bgcolor: "var(--accent, #a855f7)",
+                bgcolor: "var(--accent)",
               },
             }}
           />
@@ -808,7 +808,7 @@ export default function Upload() {
                   </span>
 
                   {statusErr && (
-                    <span style={{ color: "#fca5a5" }}>{statusErr}</span>
+                    <span style={{ color: "var(--danger)" }}>{statusErr}</span>
                   )}
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 4 }}>

@@ -739,20 +739,9 @@ const Library = () => {
 											</td>
 											<td>
 												<span
-													style={{
-														padding: "4px 8px",
-														borderRadius: "6px",
-														fontSize: "11px",
-														fontWeight: 600,
-														background: document.department
-															? "rgba(245, 158, 11, 0.12)"
-															: "rgba(255, 255, 255, 0.05)",
-														color: document.department
-															? "#fbbf24"
-															: "var(--text-secondary, #94a3b8)",
-													}}
+													className={`departmentLabel${document.department ? "" : " is-unassigned"}`}
 												>
-													{document.department || "--"}
+													{document.department || "Unassigned"}
 												</span>
 											</td>
 											<td>

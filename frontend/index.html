@@ -4,6 +4,22 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (() => {
+        let theme = "dark";
+        try {
+          const saved = localStorage.getItem("theme");
+          theme = saved === "light" || saved === "dark"
+            ? saved
+            : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        } catch {
+          theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        }
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        document.documentElement.classList.toggle("dark", theme === "dark");
+      })();
+    </script>
     <title>frontend</title>
   </head>
   <body>
